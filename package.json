@@ -16,7 +16,7 @@
     "postinstall": "prisma generate",
     "db:seed": "tsx prisma/seed.ts",
     "screenshots": "tsx scripts/screenshots.ts",
-    "vercel-build": "prisma migrate deploy && next build"
+    "vercel-build": "node scripts/migrate-if-configured.mjs && next build"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",
