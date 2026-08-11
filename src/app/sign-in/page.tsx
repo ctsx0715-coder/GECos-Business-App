@@ -1,6 +1,10 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { DEV_USER_COOKIE, listDevUsers } from "@/lib/auth/session";
+import {
+  DEV_USER_COOKIE,
+  demoAuthEnabled,
+  listDevUsers,
+} from "@/lib/auth/session";
 import { Card } from "@/components/ui";
 import { initials } from "@/lib/format";
 
@@ -52,10 +56,36 @@ export default async function SignInPage() {
         </p>
       </div>
 
-      {users.length === 0 && (
-        <Card className="px-5 py-8 text-center text-sm text-muted">
-          No users found. Run <code className="font-mono">pnpm db:seed</code>{" "}
-          first.
+      {/*
+        Two different failures used to render the same message, which sent
+        whoever hit it looking in the wrong place. An empty list means the
+        database has no users; the flag being off means the list was never
+        queried at all.
+      */}
+      {!demoAuthEnabled() && (
+        <Card className="px-5 py-8 text-sm">
+          <p className="font-medium">Demo sign-in is switched off.</p>
+          <p className="mt-2 text-muted">
+            Set <code className="font-mono">NOPEDI_DEMO_AUTH</code> to{" "}
+            <code className="font-mono">true</code> in the environment, then
+            redeploy. On Vercel, environment variables only reach a deployment
+            built after they were added — changing one does not affect the
+            deployment already running.
+          </p>
+          <p className="mt-2 text-muted">
+            This is not the same as an empty database. Nothing has been queried.
+          </p>
+        </Card>
+      )}
+
+      {demoAuthEnabled() && users.length === 0 && (
+        <Card className="px-5 py-8 text-sm">
+          <p className="font-medium">No users in the database.</p>
+          <p className="mt-2 text-muted">
+            Demo sign-in is on and the database was reachable, but it holds no
+            users. Run the <strong>Seed database</strong> workflow in GitHub
+            Actions, or <code className="font-mono">pnpm db:seed</code> locally.
+          </p>
         </Card>
       )}
 
