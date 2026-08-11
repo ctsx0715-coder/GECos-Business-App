@@ -12,6 +12,9 @@ import { initials } from "@/lib/format";
  * Officer and the Managing Director in one click is exactly what makes this a
  * useful discovery tool (docs/01-demo-scope.md).
  */
+// Reads the user list from the database at request time, never at build time.
+export const dynamic = "force-dynamic";
+
 export default async function SignInPage() {
   const users = await listDevUsers();
 

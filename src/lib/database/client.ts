@@ -51,11 +51,17 @@ const globalForPrisma = globalThis as unknown as {
   nopediRawDb?: PrismaClient;
 };
 
-export const rawDb: PrismaClient =
-  globalForPrisma.nopediRawDb ?? createRawClient();
+let rawInstance: PrismaClient | undefined;
+let extendedInstance: ExtendedClient | undefined;
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.nopediRawDb = rawDb;
+function resolveRaw(): PrismaClient {
+  if (!rawInstance) {
+    rawInstance = globalForPrisma.nopediRawDb ?? createRawClient();
+    if (process.env.NODE_ENV !== "production") {
+      globalForPrisma.nopediRawDb = rawInstance;
+    }
+  }
+  return rawInstance;
 }
 
 /**
@@ -66,4 +72,34 @@ if (process.env.NODE_ENV !== "production") {
  * restarted — which is a genuinely confusing hour to lose. Rebuilding the
  * wrapper per module instance is cheap; reopening the pool is not.
  */
-export const db: ExtendedClient = buildExtendedClient(rawDb);
+function resolveExtended(): ExtendedClient {
+  if (!extendedInstance) extendedInstance = buildExtendedClient(resolveRaw());
+  return extendedInstance;
+}
+
+/**
+ * Both clients are lazy.
+ *
+ * `next build` imports every module to collect page data, so constructing the
+ * client at module scope opened a connection pool on the build machine — and
+ * failed the build outright when DATABASE_URL was absent, which it should be
+ * during a build. Nothing connects until the first query actually runs.
+ */
+function lazyClient<T extends object>(resolve: () => T): T {
+  return new Proxy({} as T, {
+    get(_target, property, receiver) {
+      const client = resolve();
+      const value = Reflect.get(client, property, receiver);
+      return typeof value === "function" ? value.bind(client) : value;
+    },
+    has(_target, property) {
+      return Reflect.has(resolve(), property);
+    },
+    getPrototypeOf() {
+      return Reflect.getPrototypeOf(resolve());
+    },
+  });
+}
+
+export const rawDb: PrismaClient = lazyClient(resolveRaw);
+export const db: ExtendedClient = lazyClient(resolveExtended);

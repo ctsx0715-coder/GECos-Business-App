@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { getSession, DEV_USER_COOKIE } from "@/lib/auth/session";
+import { getSession, demoAuthEnabled, DEV_USER_COOKIE } from "@/lib/auth/session";
 import { withRequestContext } from "@/lib/database/tenant-context";
 import { db } from "@/lib/database/client";
 import { initials } from "@/lib/format";
@@ -15,6 +15,18 @@ import type { PermissionKey } from "@/lib/permissions";
  * filtering here is a courtesy — services enforce the same rules server-side,
  * so a hand-typed URL gets a 403 rather than a page.
  */
+
+/**
+ * Everything behind sign-in is per user and per tenant, so none of it may be
+ * statically prerendered or shared between requests.
+ *
+ * Without this, Next decides dynamism by observing whether a dynamic API such
+ * as cookies() was called — which here depended on whether demo auth happened
+ * to be switched on. That is far too subtle a thing for cache correctness in a
+ * multi-tenant app to rest on: get it wrong and one tenant is served another's
+ * cached page. Stating it outright removes the question.
+ */
+export const dynamic = "force-dynamic";
 
 interface NavItem {
   href: string;
@@ -99,6 +111,13 @@ export default async function AppLayout({
 
   return (
     <div className="min-h-dvh">
+      {demoAuthEnabled() && (
+        <p className="bg-warning-soft px-6 py-1.5 text-center text-xs text-warning">
+          <strong className="font-semibold">Demo sign-in is enabled.</strong>{" "}
+          Anyone who can reach this deployment can sign in as any user. Not for
+          real data.
+        </p>
+      )}
       <header className="sticky top-0 z-10 border-b border-border bg-surface/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-6 px-6 py-3">
           <Link href="/dashboard" className="shrink-0">

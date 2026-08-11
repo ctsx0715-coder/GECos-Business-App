@@ -19,6 +19,25 @@ import { permissionsForUser, type PermissionKey } from "@/lib/permissions";
 
 export const DEV_USER_COOKIE = "nopedi_dev_user";
 
+/**
+ * Demo authentication: pick a user from a list, no credentials.
+ *
+ * This is NOT authentication. Anyone who can reach the deployment can sign in
+ * as anyone, including the Managing Director. It exists so the role gate and
+ * the approval chain can be demonstrated before Clerk is wired in.
+ *
+ * It works in production builds deliberately — a deployed demo is the whole
+ * point — but it is off unless NOPEDI_DEMO_AUTH is explicitly "true", and the
+ * app shows a permanent banner whenever it is on, so nobody can mistake the
+ * deployment for a secured one.
+ *
+ * Put Vercel Deployment Protection in front of any deployment running with
+ * this enabled, and turn it off the moment Clerk lands.
+ */
+export function demoAuthEnabled(): boolean {
+  return process.env.NOPEDI_DEMO_AUTH === "true";
+}
+
 export interface Session {
   userId: string;
   organisationId: string;
@@ -29,17 +48,8 @@ export interface Session {
   permissions: Set<PermissionKey>;
 }
 
-function devAuthEnabled(): boolean {
-  // Fails closed: the dev provider only works when explicitly switched on and
-  // never in a production build.
-  return (
-    process.env.NODE_ENV !== "production" &&
-    process.env.NOPEDI_DEV_AUTH === "true"
-  );
-}
-
 async function resolveUserId(): Promise<string | null> {
-  if (devAuthEnabled()) {
+  if (demoAuthEnabled()) {
     const store = await cookies();
     return store.get(DEV_USER_COOKIE)?.value ?? null;
   }
@@ -109,9 +119,9 @@ export async function withSession<T>(
   );
 }
 
-/** Users offered by the development sign-in screen. */
+/** Users offered by the demo sign-in screen. */
 export async function listDevUsers() {
-  if (!devAuthEnabled()) return [];
+  if (!demoAuthEnabled()) return [];
   return rawDb.user.findMany({
     where: { deletedAt: null, isActive: true },
     orderBy: [{ organisation: { name: "asc" } }, { firstName: "asc" }],
