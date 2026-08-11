@@ -55,18 +55,35 @@ stricter residency term than the statute does; some organs of state do.
 
 ---
 
-## ADR-001 — Multi-tenant with Postgres row-level security
+## ADR-001 — Multi-tenant, column now, RLS before real data
 
-Every table carries `organisation_id`. RLS policies are enabled on every tenant
-table and the tenant is set per request via a session variable.
+Every table carries `organisation_id`. This is not negotiable and not deferrable:
+it is the shape of the data, not a security feature. Adding a tenant column to
+forty populated tables later means a migration and backfill per table plus a
+rewrite of every existing query.
 
-Application-layer filtering alone is rejected. It means a single forgotten
-`where` clause leaks one client's tender pricing to another. RLS makes that
-structurally impossible rather than a matter of discipline.
+Tenant enforcement happens in two layers, deliberately staged:
 
-Cost: every query runs inside a transaction that sets the tenant context, and
-migrations must remember to enable RLS on new tables. Both are handled once in
-the Prisma client wrapper and a migration lint check.
+**Stage 1 — repository layer.** The Prisma extension (ADR-007) injects
+`organisation_id` into every query. A test asserts that a second organisation's
+records are invisible when querying with the wrong tenant context.
+
+**Stage 2 — Postgres RLS.** Policies enabled on every tenant table, tenant set
+per request via a session variable.
+
+RLS is the stronger guarantee, because repository enforcement is still a matter
+of discipline and one forgotten path leaks another client's tender pricing. But
+it is genuinely retrofittable *given the column already exists* — enabling it is
+`ALTER TABLE ... ENABLE ROW LEVEL SECURITY` plus a policy per table, with no data
+change and no query rewrite.
+
+It is deferred because it adds real development friction: every query needs
+session context, and a missing context returns an empty result rather than an
+error, which is an expensive way to debug.
+
+**RLS must be enabled before any real Nopedi data enters the system**, and before
+a second tenant exists in production. Repository-only enforcement is acceptable
+for a seeded demo. It is not acceptable for live client data.
 
 ## ADR-002 — Clerk owns authentication, we own authorisation
 

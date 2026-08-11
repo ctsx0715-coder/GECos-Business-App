@@ -35,14 +35,38 @@ Sign in with MFA
   → Nightly cron sweeps expiry and sends warnings
 ```
 
+## Security posture for the skeleton
+
+Deliberately staged. The reasoning is retrofit cost, not risk appetite.
+
+**Deferred to Stage 2 — config and middleware, costs the same later as now:**
+MFA, password policy, account lockout, SSO, rate limiting, CSP and secure
+headers, session expiry tuning, the full permission matrix, Postgres RLS
+(see ADR-001).
+
+MFA is deliberately *off* during Stage 1. It makes fifty logins a day tedious
+and it makes live demos worse.
+
+**Kept in Stage 1 — structural, expensive to retrofit:**
+`organisation_id` on every table, the local `users` table mirroring Clerk, the
+Prisma extension doing tenant scoping plus soft delete plus audit, and one
+enforced server-side permission check to prove the pattern.
+
+None of these are security features in the usual sense. They are the shape of
+the schema and the single choke point every write passes through. Deferring them
+does not remove the work, it multiplies it across eighteen modules.
+
+**Hard gate:** RLS and MFA go on before real Nopedi data enters the system and
+before a second tenant exists in production. Seeded demo data is fine without
+them; live client data is not.
+
 ## Acceptance criteria
 
 The skeleton is done when all of these are true:
 
 - [ ] A second seeded organisation exists, and its tenders are invisible to the
-      first — verified by querying directly with the wrong tenant context, not
-      just by clicking around
-- [ ] Sign-in enforces MFA
+      first — verified by an automated test querying with the wrong tenant
+      context, not just by clicking around
 - [ ] A Tender Officer cannot approve their own tender, and gets a 403 from the
       server action, not just a hidden button
 - [ ] A 40MB PDF uploads successfully without passing through a function
