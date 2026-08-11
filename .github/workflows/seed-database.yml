@@ -1,0 +1,68 @@
+name: Seed database
+
+# Manually triggered from the GitHub UI. This exists because the seed is a
+# TypeScript script that needs a terminal, and running it from Actions means
+# never needing one — and never pasting a database URL into a chat window.
+#
+# DESTRUCTIVE: the seed truncates every table before writing. It is for demo
+# databases only. The confirmation input below is the guard against someone
+# running it against real client data by accident.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type SEED to confirm — this DELETES all existing data'
+        required: true
+        default: ''
+      environment:
+        description: 'Which DATABASE_URL secret to use'
+        required: true
+        default: 'demo'
+        type: choice
+        options:
+          - demo
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the confirmation
+        if: inputs.confirm != 'SEED'
+        run: |
+          echo "::error::Confirmation failed. Type SEED exactly to run this."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm prisma migrate deploy
+
+      - name: Seed
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm db:seed
+
+      - name: Summary
+        run: |
+          echo "### Database seeded" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Reload the deployment — no redeploy needed." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Sign in as Thato Chokoe (Managing Director) to see everything," >> $GITHUB_STEP_SUMMARY
+          echo "Sipho Ndlovu (Tender Officer) for the reduced view, or" >> $GITHUB_STEP_SUMMARY
+          echo "Naledi Mahlangu to confirm the other tenant sees none of it." >> $GITHUB_STEP_SUMMARY
