@@ -176,8 +176,43 @@ export function createTenancyExtension(base: PrismaClient) {
           // verified on the way out instead of injected on the way in.
           // ---------------------------------------------------------------
           if (READ_UNIQUE_OPS.has(operation)) {
-            const result = (await query(args)) as UnknownRecord | null;
+            // The verification needs organisationId and deletedAt on the
+            // returned row. A caller using `select` or `omit` may have left
+            // them out, in which case the check would compare against
+            // undefined and discard a perfectly valid record. Ask for them,
+            // then strip them again so the caller gets what it requested.
+            const select = a.select as UnknownRecord | undefined;
+            const omit = a.omit as UnknownRecord | undefined;
+            const borrowed: string[] = [];
+
+            let nextArgs = args;
+            if (select) {
+              const nextSelect = { ...select };
+              if (organisationId && nextSelect.organisationId === undefined) {
+                nextSelect.organisationId = true;
+                borrowed.push("organisationId");
+              }
+              if (softDeletable && nextSelect.deletedAt === undefined) {
+                nextSelect.deletedAt = true;
+                borrowed.push("deletedAt");
+              }
+              nextArgs = { ...a, select: nextSelect } as typeof args;
+            } else if (omit) {
+              const nextOmit = { ...omit };
+              if (organisationId && nextOmit.organisationId === true) {
+                nextOmit.organisationId = false;
+                borrowed.push("organisationId");
+              }
+              if (softDeletable && nextOmit.deletedAt === true) {
+                nextOmit.deletedAt = false;
+                borrowed.push("deletedAt");
+              }
+              nextArgs = { ...a, omit: nextOmit } as typeof args;
+            }
+
+            const result = (await query(nextArgs)) as UnknownRecord | null;
             if (!result) return result;
+
             const wrongTenant =
               organisationId !== undefined &&
               result.organisationId !== organisationId;
@@ -190,6 +225,12 @@ export function createTenancyExtension(base: PrismaClient) {
                 );
               }
               return null;
+            }
+
+            if (borrowed.length > 0) {
+              const cleaned = { ...result };
+              for (const key of borrowed) delete cleaned[key];
+              return cleaned;
             }
             return result;
           }

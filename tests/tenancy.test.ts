@@ -142,6 +142,59 @@ describe("tenant isolation", () => {
     expect(rivalTender?.industry).toBeNull();
   });
 
+  it("still returns the record when findUnique selects narrow fields", async () => {
+    // Regression: the tenant is verified on the returned row, so a select that
+    // omitted organisationId used to compare against undefined and discard a
+    // valid record. Every findUnique with a narrow select returned null.
+    const tender = await withSystemContext(nopediId, () =>
+      makeTender("TN-2026-0200", "Narrow select"),
+    );
+
+    const found = await withSystemContext(nopediId, () =>
+      db.tender.findUnique({
+        where: { id: tender.id },
+        select: { id: true, title: true },
+      }),
+    );
+
+    expect(found).toEqual({ id: tender.id, title: "Narrow select" });
+    expect(found).not.toHaveProperty("organisationId");
+    expect(found).not.toHaveProperty("deletedAt");
+  });
+
+  it("still blocks cross-tenant reads when findUnique selects narrow fields", async () => {
+    const tender = await withSystemContext(nopediId, () =>
+      makeTender("TN-2026-0201", "Narrow select"),
+    );
+
+    const leaked = await withSystemContext(rivalId, () =>
+      db.tender.findUnique({
+        where: { id: tender.id },
+        select: { id: true, title: true },
+      }),
+    );
+
+    expect(leaked).toBeNull();
+  });
+
+  it("hides soft-deleted records from a narrow-select findUnique", async () => {
+    const tender = await withSystemContext(nopediId, () =>
+      makeTender("TN-2026-0202", "Deleted"),
+    );
+    await withSystemContext(nopediId, () =>
+      db.tender.delete({ where: { id: tender.id } }),
+    );
+
+    const found = await withSystemContext(nopediId, () =>
+      db.tender.findUnique({
+        where: { id: tender.id },
+        select: { id: true, title: true },
+      }),
+    );
+
+    expect(found).toBeNull();
+  });
+
   it("refuses a create aimed at a tenant other than the bound one", async () => {
     await expect(
       withSystemContext(nopediId, () =>

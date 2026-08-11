@@ -51,3 +51,4 @@ src/generated/
 
 # Local Postgres data if a cluster is ever initialised inside the repo
 /pgdata/
+screenshots/
