@@ -20,8 +20,8 @@ African contractor, and because it exercises the hardest platform services —
 documents, checklists, approvals, deadlines — rather than avoiding them.
 
 ```
-Sign in with MFA
-  → Organisation context resolved, RLS active
+Sign in (MFA deferred to Stage 2)
+  → Organisation context resolved, tenancy enforced (RLS in Stage 2)
   → RBAC gate: Tender Officer and Director see different screens
   → Create a tender (client, tender number, closing date, value)
   → Attach documents — presigned direct upload, versioned
@@ -62,21 +62,27 @@ them; live client data is not.
 
 ## Acceptance criteria
 
-The skeleton is done when all of these are true:
+The skeleton is done when all of these are true. Ticks are backed by tests in
+`tests/`, not by having clicked through it once.
 
-- [ ] A second seeded organisation exists, and its tenders are invisible to the
+Everything still unticked is blocked on external credentials (Clerk, Vercel
+Blob, Resend, Sentry) rather than on design decisions.
+
+- [x] A second seeded organisation exists, and its tenders are invisible to the
       first — verified by an automated test querying with the wrong tenant
       context, not just by clicking around
-- [ ] A Tender Officer cannot approve their own tender, and gets a 403 from the
-      server action, not just a hidden button
+- [x] A Tender Officer cannot approve their own tender — a 403 from the service
+      layer, not a hidden button. Holding `tenders.tender.approve` is not
+      enough if you own or submitted the tender. (Enforced and tested in the
+      service; the server action wrapping it is still to come.)
 - [ ] A 40MB PDF uploads successfully without passing through a function
 - [ ] Uploading the same document twice creates version 2, and version 1 is
       still retrievable
-- [ ] The checklist marks a tender non-submittable while a required document is
+- [x] The checklist marks a tender non-submittable while a required document is
       missing, and the submit button is enforced server-side
 - [ ] Approval fires both an in-app notification and an email
-- [ ] `audit_logs` contains a complete, readable chain for the tender's life
-- [ ] Deleting a tender sets `deleted_at` and it vanishes from lists, but the
+- [x] `audit_logs` contains a complete, readable chain for the tender's life
+- [x] Deleting a tender sets `deleted_at` and it vanishes from lists, but the
       row and its audit history remain
 - [ ] Both dashboard widgets read from the metrics layer, not from Prisma
 - [ ] The cron job runs on Vercel and emits a 30-day expiry warning

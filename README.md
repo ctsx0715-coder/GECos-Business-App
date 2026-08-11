@@ -1,36 +1,99 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Nopedi Business Operating System
 
-## Getting Started
+A centralised platform for managing people, customers, projects, tenders,
+procurement, assets, compliance and financial operations from one system.
 
-First, run the development server:
+Currently at **Stage 1 — walking skeleton**. One vertical slice through the
+Tenders module, built to prove the architecture holds before it is scaled to
+the remaining modules. See [`docs/01-demo-scope.md`](docs/01-demo-scope.md) for
+what is deliberately in and out of scope.
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [`docs/00-architecture-decisions.md`](docs/00-architecture-decisions.md) | Decisions that are expensive to reverse, and why |
+| [`docs/01-demo-scope.md`](docs/01-demo-scope.md) | Skeleton scope, security staging, acceptance criteria |
+| [`docs/02-discovery-questions.md`](docs/02-discovery-questions.md) | What we still need from the client, ordered by cost of getting it wrong |
+
+## Stack
+
+Next.js 16 (App Router) · TypeScript · Tailwind · Prisma 7 · PostgreSQL ·
+Zod · Vitest. Clerk, Vercel Blob and Resend are planned but not yet wired in.
+
+## Getting started
+
+Requires Node 20.9+ and a PostgreSQL 14+ database.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
+cp .env.example .env        # then point DATABASE_URL at your database
+pnpm prisma migrate dev     # create the schema
+pnpm test                   # 116 tests against a real database
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`pnpm install` runs `prisma generate` automatically. The generated client lands
+in `src/generated/prisma` and is not committed.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Command | Does |
+|---|---|
+| `pnpm dev` | Development server |
+| `pnpm build` | Production build |
+| `pnpm test` | Full test suite (needs a database) |
+| `pnpm typecheck` | `tsc --noEmit` |
+| `pnpm lint` | ESLint |
+| `pnpm db:migrate` | Create and apply a migration |
+| `pnpm db:studio` | Browse the database |
 
-## Learn More
+## Architecture in one page
 
-To learn more about Next.js, take a look at the following resources:
+Every request flows in one direction, and each layer has one job:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+Route handler / server action
+  → Zod validation
+    → Service          business rules, permission checks
+      → Repository     tenant-scoped Prisma access
+        → Database
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+No Prisma calls in components or route handlers. No business logic in
+repositories. Permission checks live in services, because that is the single
+layer every path goes through.
 
-## Deploy on Vercel
+### The three things to understand first
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+**Tenancy.** Every table carries `organisationId`. A Prisma client extension
+(`src/lib/database/extensions.ts`) injects it into reads and writes from an
+AsyncLocalStorage request context, so no caller has to remember. Queries with
+no context bound throw rather than returning everything.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+**Nothing is hard deleted.** `delete` is rewritten as an update setting
+`deletedAt`, and reads filter it out. The row and its history survive.
+
+**Audit is automatic.** The same extension writes `audit_logs` rows with
+before/after diffs on every create, update and delete. It cannot be forgotten
+in a module written later, because no module opts into it.
+
+Model behaviour is declared in `src/lib/database/model-metadata.ts`, and
+`model-metadata.test.ts` parses the schema and fails if a model is added
+without being registered. That test is the reason the guarantees above hold as
+the system grows.
+
+## Security posture
+
+Deliberately staged — the reasoning is retrofit cost, not risk appetite, and it
+is set out in [`docs/01-demo-scope.md`](docs/01-demo-scope.md).
+
+Structural work that is expensive to add later is already in: the tenant
+column, the local users table, the extension, server-side permission checks.
+
+Configuration and middleware that costs the same later as now is deferred: MFA,
+password policy, lockout, SSO, rate limiting, secure headers, and Postgres
+row-level security.
+
+> **Hard gate.** RLS and MFA must be enabled before real client data enters the
+> system, and before a second tenant exists in production. Seeded demo data is
+> fine without them. Live data is not.
