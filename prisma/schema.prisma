@@ -1,0 +1,734 @@
+// Nopedi Business Operating System — Phase 1 foundation + Tenders.
+//
+// Conventions (see docs/00-architecture-decisions.md):
+//   - Every tenant table carries organisationId and the standard base columns.
+//   - Nothing is hard deleted. deletedAt + recordStatus, enforced by the
+//     Prisma extension in src/lib/database/extensions.
+//   - Money is integer cents (BigInt) in ZAR. Never floats.
+//   - All timestamps are timestamptz, stored UTC.
+//   - Documents and compliance items are polymorphic by (entityType, entityId)
+//     with no foreign key, validated at the service layer.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// Lifecycle of any soft-deletable record (ADR-007).
+enum RecordStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+/// Entities that can own documents, compliance items and workflow instances.
+/// Adding a value here is the only way to extend the polymorphic services.
+enum EntityType {
+  ORGANISATION
+  USER
+  CUSTOMER
+  TENDER
+  TENDER_REQUIREMENT
+  EMPLOYEE
+  PROJECT
+  ASSET
+  SUPPLIER
+  EXPENSE
+}
+
+enum TenderStatus {
+  IDENTIFIED
+  IN_PROGRESS
+  PENDING_APPROVAL
+  APPROVED
+  SUBMITTED
+  WON
+  LOST
+  NO_BID
+  WITHDRAWN
+}
+
+/// Categories for the shared expiry engine (ADR-004). One engine, many uses.
+enum ComplianceCategory {
+  TRAINING
+  MEDICAL
+  HSE
+  TENDER_DOCUMENT
+  ASSET_WARRANTY
+  INSURANCE
+  LICENCE
+  ACCREDITATION
+}
+
+/// How a workflow step resolves its approver (ADR-006).
+enum ApproverType {
+  ROLE
+  MANAGER
+  USER
+}
+
+/// Field comparison operators for step conditions. Deliberately limited to
+/// comparisons against a scalar on the triggering record.
+enum ConditionOperator {
+  EQ
+  NEQ
+  GT
+  GTE
+  LT
+  LTE
+}
+
+enum WorkflowInstanceStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum WorkflowApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SKIPPED
+  ESCALATED
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  SUBMIT
+  APPROVE
+  REJECT
+  LOGIN
+  LOGOUT
+  EXPORT
+  PERMISSION_CHANGE
+}
+
+enum AccessLevel {
+  PUBLIC
+  INTERNAL
+  RESTRICTED
+  CONFIDENTIAL
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy and identity
+// ---------------------------------------------------------------------------
+
+/// The tenant root. Has no organisationId because it is the organisation.
+model Organisation {
+  id               String  @id @default(uuid()) @db.Uuid
+  name             String
+  tradingName      String?
+  registrationNumber String?
+  vatNumber          String?
+  /// IANA timezone used to render every timestamp for this tenant.
+  timezone         String  @default("Africa/Johannesburg")
+  currency         String  @default("ZAR")
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  modules          OrganisationModule[]
+  users            User[]
+  roles            Role[]
+  customers        Customer[]
+  tenders          Tender[]
+  documents        Document[]
+  complianceItems  ComplianceItem[]
+  workflowDefs     WorkflowDefinition[]
+  workflowInstance WorkflowInstance[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+  sequences        ReferenceSequence[]
+
+  @@map("organisations")
+}
+
+/// Per-tenant module enablement (ADR-009). Navigation, routes and permission
+/// checks all consult this.
+model OrganisationModule {
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  moduleKey      String
+  isEnabled      Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, moduleKey])
+  @@index([organisationId])
+  @@map("organisation_modules")
+}
+
+/// Local mirror of the Clerk user (ADR-002). Every foreign key in the system
+/// points here, never at a Clerk identifier.
+model User {
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  /// Clerk's user id. The only place a vendor identifier is stored.
+  clerkUserId    String? @unique
+  email          String
+  firstName      String
+  lastName       String
+  jobTitle       String?
+  phone          String?
+  managerId      String? @db.Uuid
+  isActive       Boolean @default(true)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  manager      User?        @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports      User[]       @relation("UserManager")
+
+  roles              UserRole[]
+  ownedTenders       Tender[]             @relation("TenderOwner")
+  uploadedVersions   DocumentVersion[]
+  startedWorkflows   WorkflowInstance[]   @relation("WorkflowStartedBy")
+  assignedApprovals  WorkflowApproval[]   @relation("ApprovalAssignee")
+  decidedApprovals   WorkflowApproval[]   @relation("ApprovalDecider")
+  stepApproverFor    WorkflowStep[]       @relation("StepApproverUser")
+  stepEscalationFor  WorkflowStep[]       @relation("StepEscalationUser")
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+
+  @@unique([organisationId, email])
+  @@index([organisationId])
+  @@index([managerId])
+  @@map("users")
+}
+
+/// Roles are per tenant, so Nopedi can name and shape their own.
+model Role {
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  key            String
+  name           String
+  description    String?
+  /// System roles are seeded and cannot be deleted by users.
+  isSystem       Boolean @default(false)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  permissions      RolePermission[]
+  users            UserRole[]
+  stepApproverFor  WorkflowStep[]     @relation("StepApproverRole")
+  assignedApprovals WorkflowApproval[] @relation("ApprovalAssigneeRole")
+
+  @@unique([organisationId, key])
+  @@index([organisationId])
+  @@map("roles")
+}
+
+/// The global permission catalogue. Not tenant scoped — these are the verbs
+/// the software supports, identical for every customer.
+model Permission {
+  id          String  @id @default(uuid()) @db.Uuid
+  key         String  @unique
+  moduleKey   String
+  description String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  roles RolePermission[]
+
+  @@index([moduleKey])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId String @db.Uuid
+  roleId String @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  createdBy String?  @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+/// Per-organisation, per-year counters behind human-facing reference numbers
+/// such as TN-2026-0041.
+model ReferenceSequence {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  prefix         String
+  year           Int
+  lastNumber     Int    @default(0)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, prefix, year])
+  @@map("reference_sequences")
+}
+
+// ---------------------------------------------------------------------------
+// Shared business entities
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id                 String  @id @default(uuid()) @db.Uuid
+  organisationId     String  @db.Uuid
+  name               String
+  registrationNumber String?
+  vatNumber          String?
+  email              String?
+  phone              String?
+  addressLine1       String?
+  addressLine2       String?
+  city               String?
+  province           String?
+  postalCode         String?
+  countryCode        String  @default("ZA")
+  /// True for organs of state, which carry extra tender compliance rules.
+  isPublicSector     Boolean @default(false)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  tenders      Tender[]
+
+  @@index([organisationId])
+  @@index([organisationId, name])
+  @@map("customers")
+}
+
+// ---------------------------------------------------------------------------
+// Tenders
+// ---------------------------------------------------------------------------
+
+model Tender {
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  /// Our reference, e.g. TN-2026-0041. Unique per tenant.
+  reference      String
+  /// The client's own tender number, as printed on their documents.
+  tenderNumber   String?
+  title          String
+  description    String?
+  customerId     String? @db.Uuid
+  ownerId        String? @db.Uuid
+
+  closingAt          DateTime     @db.Timestamptz(6)
+  estimatedValueCents BigInt?
+  currency           String       @default("ZAR")
+  industry           String?
+  status             TenderStatus @default(IDENTIFIED)
+
+  submittedAt      DateTime? @db.Timestamptz(6)
+  outcomeAt        DateTime? @db.Timestamptz(6)
+  awardedValueCents BigInt?
+  outcomeNotes     String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  owner        User?        @relation("TenderOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  requirements TenderRequirement[]
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([organisationId, status])
+  @@index([organisationId, closingAt])
+  @@map("tenders")
+}
+
+/// One line of the submission checklist. A tender cannot be submitted while a
+/// mandatory requirement is unsatisfied — enforced in the service, not the UI.
+model TenderRequirement {
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  tenderId       String  @db.Uuid
+  label          String
+  description    String?
+  isMandatory    Boolean @default(true)
+  sortOrder      Int     @default(0)
+
+  satisfiedAt     DateTime? @db.Timestamptz(6)
+  satisfiedBy     String?   @db.Uuid
+  /// Optional link to the document that satisfies this requirement.
+  documentId      String?   @db.Uuid
+  notes           String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  tender   Tender    @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  document Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@index([tenderId])
+  @@map("tender_requirements")
+}
+
+// ---------------------------------------------------------------------------
+// Documents (ADR-003) — a platform service, not a module
+// ---------------------------------------------------------------------------
+
+model Document {
+  id             String     @id @default(uuid()) @db.Uuid
+  organisationId String     @db.Uuid
+  /// Polymorphic owner. No foreign key; validated at the service layer.
+  entityType     EntityType
+  entityId       String     @db.Uuid
+
+  name           String
+  category       String?
+  accessLevel    AccessLevel @default(INTERNAL)
+  /// Pointer to the newest version, kept for cheap listing.
+  currentVersion Int         @default(0)
+  /// Set when the document itself expires, e.g. a tax clearance certificate.
+  expiresAt      DateTime?   @db.Timestamptz(6)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation        @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  versions     DocumentVersion[]
+  requirements TenderRequirement[]
+  compliance   ComplianceItem[]
+
+  @@index([organisationId])
+  @@index([organisationId, entityType, entityId])
+  @@index([organisationId, expiresAt])
+  @@map("documents")
+}
+
+/// The physical files. A document is the logical thing; versions are the bytes.
+/// Only the storage key is persisted — never a signed URL.
+model DocumentVersion {
+  id            String @id @default(uuid()) @db.Uuid
+  documentId    String @db.Uuid
+  versionNumber Int
+
+  /// org/{organisationId}/{entityType}/{entityId}/{documentId}/v{n}/{filename}
+  storageKey String
+  fileName   String
+  mimeType   String
+  sizeBytes  Int
+  checksum   String?
+
+  uploadedById String?  @db.Uuid
+  uploadedAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploadedBy User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@unique([documentId, versionNumber])
+  @@index([documentId])
+  @@map("document_versions")
+}
+
+// ---------------------------------------------------------------------------
+// Compliance / expiry engine (ADR-004) — one engine, used everywhere
+// ---------------------------------------------------------------------------
+
+/// Anything with an expiry date and a computed status. Deliberately generic so
+/// training, medicals, HSE, tender documents, warranties and insurance all
+/// share one engine and one notification schedule.
+///
+/// There is no status column. Status is derived from expiresAt at read time,
+/// because a stored status goes stale the moment nothing writes to it.
+model ComplianceItem {
+  id             String             @id @default(uuid()) @db.Uuid
+  organisationId String             @db.Uuid
+  category       ComplianceCategory
+  /// Polymorphic owner: an employee, an asset, the organisation itself.
+  entityType     EntityType
+  entityId       String             @db.Uuid
+
+  requirementName   String
+  certificateNumber String?
+  issuedAt          DateTime? @db.Timestamptz(6)
+  expiresAt         DateTime? @db.Timestamptz(6)
+  providerName      String?
+  documentId        String?   @db.Uuid
+  notes             String?
+
+  /// Highest expiry warning already sent, in days. Prevents duplicate sends.
+  lastWarningDays Int?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  document     Document?    @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@index([organisationId, entityType, entityId])
+  @@index([organisationId, expiresAt])
+  @@index([organisationId, category])
+  @@map("compliance_items")
+}
+
+// ---------------------------------------------------------------------------
+// Approval engine (ADR-006) — linear steps, scalar conditions, nothing more
+// ---------------------------------------------------------------------------
+
+model WorkflowDefinition {
+  id             String     @id @default(uuid()) @db.Uuid
+  organisationId String     @db.Uuid
+  name           String
+  entityType     EntityType
+  /// Event that starts this workflow, e.g. "tender.submitted".
+  triggerEvent   String
+  isActive       Boolean    @default(true)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation       @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  steps        WorkflowStep[]
+  instances    WorkflowInstance[]
+
+  @@unique([organisationId, entityType, triggerEvent])
+  @@index([organisationId])
+  @@map("workflow_definitions")
+}
+
+model WorkflowStep {
+  id                   String       @id @default(uuid()) @db.Uuid
+  organisationId       String       @db.Uuid
+  workflowDefinitionId String       @db.Uuid
+  sortOrder            Int
+  name                 String
+  approverType         ApproverType
+
+  approverRoleId    String? @db.Uuid
+  approverUserId    String? @db.Uuid
+  escalationUserId  String? @db.Uuid
+  slaHours          Int?
+
+  /// Scalar condition on the triggering record. Null means the step always
+  /// applies. Cross-entity conditions are deliberately out of scope.
+  conditionField    String?
+  conditionOperator ConditionOperator?
+  conditionValue    String?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  definition     WorkflowDefinition @relation(fields: [workflowDefinitionId], references: [id], onDelete: Cascade)
+  approverRole   Role?              @relation("StepApproverRole", fields: [approverRoleId], references: [id], onDelete: SetNull)
+  approverUser   User?              @relation("StepApproverUser", fields: [approverUserId], references: [id], onDelete: SetNull)
+  escalationUser User?              @relation("StepEscalationUser", fields: [escalationUserId], references: [id], onDelete: SetNull)
+
+  approvals WorkflowApproval[]
+
+  @@unique([workflowDefinitionId, sortOrder])
+  @@index([organisationId])
+  @@map("workflow_steps")
+}
+
+/// A running approval against one specific record.
+model WorkflowInstance {
+  id                   String     @id @default(uuid()) @db.Uuid
+  organisationId       String     @db.Uuid
+  workflowDefinitionId String     @db.Uuid
+  entityType           EntityType
+  entityId             String     @db.Uuid
+
+  status           WorkflowInstanceStatus @default(PENDING)
+  currentStepOrder Int                    @default(0)
+  startedById      String?                @db.Uuid
+  startedAt        DateTime               @default(now()) @db.Timestamptz(6)
+  completedAt      DateTime?              @db.Timestamptz(6)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  organisation Organisation       @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  definition   WorkflowDefinition @relation(fields: [workflowDefinitionId], references: [id], onDelete: Cascade)
+  startedBy    User?              @relation("WorkflowStartedBy", fields: [startedById], references: [id], onDelete: SetNull)
+
+  approvals WorkflowApproval[]
+
+  @@index([organisationId])
+  @@index([organisationId, entityType, entityId])
+  @@index([organisationId, status])
+  @@map("workflow_instances")
+}
+
+/// One approver's decision on one step of one instance.
+model WorkflowApproval {
+  id                 String @id @default(uuid()) @db.Uuid
+  organisationId     String @db.Uuid
+  workflowInstanceId String @db.Uuid
+  workflowStepId     String @db.Uuid
+  sortOrder          Int
+
+  status               WorkflowApprovalStatus @default(PENDING)
+  assignedToUserId     String?                @db.Uuid
+  assignedToRoleId     String?                @db.Uuid
+  decidedByUserId      String?                @db.Uuid
+  decidedAt            DateTime?              @db.Timestamptz(6)
+  comment              String?
+  dueAt                DateTime?              @db.Timestamptz(6)
+  escalatedAt          DateTime?              @db.Timestamptz(6)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  instance       WorkflowInstance @relation(fields: [workflowInstanceId], references: [id], onDelete: Cascade)
+  step           WorkflowStep     @relation(fields: [workflowStepId], references: [id], onDelete: Cascade)
+  assignedToUser User?            @relation("ApprovalAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  assignedToRole Role?            @relation("ApprovalAssigneeRole", fields: [assignedToRoleId], references: [id], onDelete: SetNull)
+  decidedBy      User?            @relation("ApprovalDecider", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@index([workflowInstanceId])
+  @@index([organisationId, status, assignedToUserId])
+  @@index([organisationId, status, assignedToRoleId])
+  @@map("workflow_approvals")
+}
+
+// ---------------------------------------------------------------------------
+// Platform services
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id             String              @id @default(uuid()) @db.Uuid
+  organisationId String              @db.Uuid
+  userId         String              @db.Uuid
+  channel        NotificationChannel @default(IN_APP)
+  /// Dotted event key, e.g. "tender.approval.requested".
+  event          String
+  title          String
+  body           String?
+
+  entityType EntityType?
+  entityId   String?     @db.Uuid
+  /// Deep link into the app.
+  href       String?
+
+  readAt DateTime? @db.Timestamptz(6)
+  sentAt DateTime? @db.Timestamptz(6)
+  /// Set when a channel delivery fails, for retry and debugging.
+  failedReason String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId])
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+/// Append only. Never updated, never soft deleted, no deletedAt by design.
+/// Written by the Prisma extension so it cannot be forgotten in new modules.
+model AuditLog {
+  id             String      @id @default(uuid()) @db.Uuid
+  organisationId String      @db.Uuid
+  actorUserId    String?     @db.Uuid
+  action         AuditAction
+  /// The Prisma model name, e.g. "Tender". Deliberately a string rather than
+  /// EntityType: audit covers every model, whereas EntityType is the narrow
+  /// set of things documents and compliance items can hang off.
+  entityType     String
+  /// String rather than uuid so composite keys can be recorded too.
+  entityId       String
+
+  /// { field: { from, to } } for updates; the full record for creates.
+  changes Json?
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  actor        User?        @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, createdAt])
+  @@index([organisationId, entityType, entityId])
+  @@index([actorUserId])
+  @@map("audit_logs")
+}
