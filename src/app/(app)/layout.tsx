@@ -43,6 +43,24 @@ const NAV: NavItem[] = [
     permission: "reports.dashboard.view",
   },
   {
+    href: "/crm/pipeline",
+    label: "Pipeline",
+    moduleKey: "crm",
+    permission: "crm.opportunity.view",
+  },
+  {
+    href: "/crm/leads",
+    label: "Leads",
+    moduleKey: "crm",
+    permission: "crm.lead.view",
+  },
+  {
+    href: "/crm/customers",
+    label: "Customers",
+    moduleKey: "crm",
+    permission: "crm.customer.view",
+  },
+  {
     href: "/tenders",
     label: "Tenders",
     moduleKey: "tenders",

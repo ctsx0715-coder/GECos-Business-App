@@ -12,12 +12,16 @@ import type { ReactNode } from "react";
 export function Card({
   children,
   className = "",
+  id,
 }: {
   children: ReactNode;
   className?: string;
+  /** Makes a card addressable, which the browser suite relies on. */
+  id?: string;
 }) {
   return (
     <div
+      id={id}
       className={`rounded-xl border border-border bg-surface shadow-[0_1px_2px_rgba(0,0,0,0.04)] ${className}`}
     >
       {children}

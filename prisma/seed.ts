@@ -169,6 +169,7 @@ async function main() {
     people: [
       { roleKey: "executive", firstName: "Thato", lastName: "Chokoe", jobTitle: "Managing Director" },
       { roleKey: "finance_manager", firstName: "Lerato", lastName: "Mokoena", jobTitle: "Finance Manager" },
+      { roleKey: "sales_manager", firstName: "Bongani", lastName: "Sithole", jobTitle: "Sales Manager" },
       { roleKey: "tender_officer", firstName: "Sipho", lastName: "Ndlovu", jobTitle: "Tender Officer" },
       { roleKey: "employee", firstName: "Anele", lastName: "Dlamini", jobTitle: "Site Supervisor" },
     ],
@@ -338,6 +339,198 @@ async function main() {
       });
     }
 
+    // ---- CRM -------------------------------------------------------------
+    // Contacts hang off the customers already created for tenders, rather than
+    // a parallel set of client records. That is the point of the shared model.
+    const contacts = [
+      { customer: "City of Tshwane", first: "Palesa", last: "Mokwena", title: "Supply Chain Manager", primary: true },
+      { customer: "City of Tshwane", first: "Riaan", last: "Botha", title: "Project Engineer", primary: false },
+      { customer: "eThekwini Municipality", first: "Sanele", last: "Zulu", title: "Head of Infrastructure", primary: true },
+      { customer: "Eskom Holdings SOC Ltd", first: "Karabo", last: "Nkosi", title: "Contracts Manager", primary: true },
+      { customer: "Transnet SOC Ltd", first: "Yusuf", last: "Patel", title: "Procurement Lead", primary: true },
+      { customer: "Sasol South Africa", first: "Marlize", last: "van Wyk", title: "Maintenance Superintendent", primary: true },
+      { customer: "Anglo American Platinum", first: "Tebogo", last: "Ramaphosa", title: "Engineering Manager", primary: true },
+    ];
+    const contactIds = new Map<string, string>();
+    for (const person of contacts) {
+      const created = await db.contact.create({
+        data: {
+          organisationId: nopedi.organisation.id,
+          customerId: customerIds.get(person.customer)!,
+          firstName: person.first,
+          lastName: person.last,
+          jobTitle: person.title,
+          email: `${person.first.toLowerCase()}@${person.customer
+            .toLowerCase()
+            .replace(/[^a-z]/g, "")
+            .slice(0, 12)}.co.za`,
+          isPrimary: person.primary,
+        },
+      });
+      if (person.primary) contactIds.set(person.customer, created.id);
+    }
+
+    // Open deals across the three working stages, two of them tied to the
+    // tenders they are being pursued through.
+    const allTenders = await db.tender.findMany({
+      select: { id: true, title: true },
+    });
+    const tenderByTitle = new Map(allTenders.map((t) => [t.title, t.id]));
+
+    const deals: Array<{
+      title: string;
+      customer: string;
+      valueRands: number;
+      probability: number;
+      stage: "QUALIFIED" | "PROPOSAL" | "NEGOTIATION" | "WON" | "LOST";
+      closeInDays: number;
+      tenderTitle?: string;
+      lostReason?: string;
+    }> = [
+      { title: "Framework agreement — bulk water", customer: "City of Tshwane", valueRands: 18_500_000, probability: 60, stage: "NEGOTIATION", closeInDays: 21, tenderTitle: "Bulk water pipeline replacement, Ward 12" },
+      { title: "Conveyor maintenance, 3-year term", customer: "Eskom Holdings SOC Ltd", valueRands: 22_100_000, probability: 75, stage: "NEGOTIATION", closeInDays: 9, tenderTitle: "Medupi conveyor maintenance contract" },
+      { title: "Substation upgrade programme", customer: "eThekwini Municipality", valueRands: 8_750_000, probability: 50, stage: "PROPOSAL", closeInDays: 34, tenderTitle: "Substation refurbishment, Kwa-Mashu" },
+      { title: "Shutdown support panel", customer: "Sasol South Africa", valueRands: 6_300_000, probability: 50, stage: "PROPOSAL", closeInDays: 47, tenderTitle: "Plant electrical shutdown support" },
+      { title: "Instrumentation supply agreement", customer: "Anglo American Platinum", valueRands: 4_950_000, probability: 25, stage: "QUALIFIED", closeInDays: 62, tenderTitle: "Tailings dam instrumentation" },
+      { title: "Port infrastructure retainer", customer: "Transnet SOC Ltd", valueRands: 13_200_000, probability: 25, stage: "QUALIFIED", closeInDays: 78 },
+      { title: "Reservoir telemetry rollout", customer: "City of Tshwane", valueRands: 3_400_000, probability: 100, stage: "WON", closeInDays: -18 },
+      { title: "Switchgear replacement phase 2", customer: "Eskom Holdings SOC Ltd", valueRands: 7_800_000, probability: 100, stage: "WON", closeInDays: -51 },
+      { title: "Cornubia earthworks package", customer: "eThekwini Municipality", valueRands: 21_500_000, probability: 0, stage: "LOST", closeInDays: -33, lostReason: "Priced third of five. Competitor had local plant already on site." },
+    ];
+
+    let oppCounter = 0;
+    const opportunityIds: string[] = [];
+    for (const deal of deals) {
+      oppCounter += 1;
+      const closed = deal.stage === "WON" || deal.stage === "LOST";
+      const created = await db.opportunity.create({
+        data: {
+          organisationId: nopedi.organisation.id,
+          reference: `OPP-${year}-${String(oppCounter).padStart(4, "0")}`,
+          title: deal.title,
+          customerId: customerIds.get(deal.customer)!,
+          contactId: contactIds.get(deal.customer),
+          ownerId: nopedi.userIds.sales_manager,
+          valueCents: BigInt(deal.valueRands * 100),
+          probability: deal.probability,
+          expectedCloseAt: days(deal.closeInDays),
+          stage: deal.stage,
+          source: "EXISTING_CLIENT",
+          tenderId: deal.tenderTitle ? tenderByTitle.get(deal.tenderTitle) : null,
+          closedAt: closed ? days(deal.closeInDays) : null,
+          lostReason: deal.lostReason,
+        },
+      });
+      opportunityIds.push(created.id);
+    }
+
+    await db.referenceSequence.upsert({
+      where: {
+        organisationId_prefix_year: {
+          organisationId: nopedi.organisation.id,
+          prefix: "OPP",
+          year,
+        },
+      },
+      create: {
+        organisationId: nopedi.organisation.id,
+        prefix: "OPP",
+        year,
+        lastNumber: oppCounter,
+      },
+      update: { lastNumber: oppCounter },
+    });
+
+    // Unworked and qualified leads, so the convert flow has something to act on.
+    const leads: Array<{
+      company: string;
+      contact: string;
+      source: "REFERRAL" | "WEBSITE" | "TENDER_PORTAL" | "COLD_OUTREACH" | "EVENT";
+      valueRands: number;
+      status: "NEW" | "CONTACTED" | "QUALIFIED";
+      description: string;
+    }> = [
+      { company: "Rand Water", contact: "Nomsa Dube", source: "REFERRAL", valueRands: 9_600_000, status: "QUALIFIED", description: "Pump station refurbishment across three sites. Referred by the Tshwane team." },
+      { company: "Johannesburg Roads Agency", contact: "Pieter Steyn", source: "TENDER_PORTAL", valueRands: 5_200_000, status: "NEW", description: "Stormwater culvert rehabilitation. Saw the CIDB grading on eTenders." },
+      { company: "Gautrain Management Agency", contact: "Ayanda Khumalo", source: "EVENT", valueRands: 14_000_000, status: "CONTACTED", description: "Met at the rail infrastructure indaba. Depot electrical upgrade planned for next year." },
+      { company: "Impala Platinum", contact: "Dirk Lombard", source: "COLD_OUTREACH", valueRands: 7_400_000, status: "NEW", description: "Enquiry about conveyor instrumentation after the Anglo work." },
+      { company: "Umgeni Water", contact: "Thandi Mthembu", source: "WEBSITE", valueRands: 3_100_000, status: "CONTACTED", description: "Website enquiry about telemetry installation." },
+    ];
+
+    let leadCounter = 0;
+    const leadIds: string[] = [];
+    for (const item of leads) {
+      leadCounter += 1;
+      const created = await db.lead.create({
+        data: {
+          organisationId: nopedi.organisation.id,
+          reference: `LD-${year}-${String(leadCounter).padStart(4, "0")}`,
+          companyName: item.company,
+          contactName: item.contact,
+          email: `${item.contact.split(" ")[0].toLowerCase()}@example.co.za`,
+          source: item.source,
+          status: item.status,
+          description: item.description,
+          estimatedValueCents: BigInt(item.valueRands * 100),
+          ownerId: nopedi.userIds.sales_manager,
+        },
+      });
+      leadIds.push(created.id);
+    }
+
+    await db.referenceSequence.upsert({
+      where: {
+        organisationId_prefix_year: {
+          organisationId: nopedi.organisation.id,
+          prefix: "LD",
+          year,
+        },
+      },
+      create: {
+        organisationId: nopedi.organisation.id,
+        prefix: "LD",
+        year,
+        lastNumber: leadCounter,
+      },
+      update: { lastNumber: leadCounter },
+    });
+
+    // Timelines, so the activity panels are not empty on first look.
+    const activities: Array<{
+      entityType: "OPPORTUNITY" | "LEAD" | "CUSTOMER";
+      index: number;
+      type: "CALL" | "EMAIL" | "MEETING" | "SITE_VISIT" | "NOTE";
+      subject: string;
+      daysAgo: number;
+    }> = [
+      { entityType: "OPPORTUNITY", index: 0, type: "MEETING", subject: "Scope workshop with supply chain", daysAgo: 12 },
+      { entityType: "OPPORTUNITY", index: 0, type: "EMAIL", subject: "Sent revised rates schedule", daysAgo: 5 },
+      { entityType: "OPPORTUNITY", index: 1, type: "CALL", subject: "Clarified availability guarantees", daysAgo: 8 },
+      { entityType: "OPPORTUNITY", index: 1, type: "SITE_VISIT", subject: "Walked the conveyor route at Medupi", daysAgo: 3 },
+      { entityType: "OPPORTUNITY", index: 2, type: "EMAIL", subject: "Proposal submitted", daysAgo: 6 },
+      { entityType: "LEAD", index: 0, type: "CALL", subject: "Introductory call — confirmed budget exists", daysAgo: 4 },
+      { entityType: "LEAD", index: 2, type: "MEETING", subject: "Coffee at the indaba", daysAgo: 15 },
+    ];
+
+    for (const item of activities) {
+      const entityId =
+        item.entityType === "OPPORTUNITY"
+          ? opportunityIds[item.index]
+          : leadIds[item.index];
+      if (!entityId) continue;
+      await db.activity.create({
+        data: {
+          organisationId: nopedi.organisation.id,
+          entityType: item.entityType,
+          entityId,
+          type: item.type,
+          subject: item.subject,
+          occurredAt: days(-item.daysAgo),
+          ownerId: nopedi.userIds.sales_manager,
+        },
+      });
+    }
+
     // Expiring company compliance, which the dashboard surfaces and which the
     // same engine will later drive for HR and HSE (ADR-004).
     const compliance = [
@@ -370,6 +563,7 @@ async function main() {
     people: [
       { roleKey: "executive", firstName: "Naledi", lastName: "Mahlangu", jobTitle: "Director" },
       { roleKey: "tender_officer", firstName: "Johan", lastName: "Pretorius", jobTitle: "Bid Manager" },
+      { roleKey: "sales_manager", firstName: "Marius", lastName: "Venter", jobTitle: "Sales Lead" },
     ],
   });
 

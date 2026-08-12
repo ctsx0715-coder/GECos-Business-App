@@ -36,6 +36,9 @@ enum EntityType {
   ORGANISATION
   USER
   CUSTOMER
+  CONTACT
+  LEAD
+  OPPORTUNITY
   TENDER
   TENDER_REQUIREMENT
   EMPLOYEE
@@ -55,6 +58,44 @@ enum TenderStatus {
   LOST
   NO_BID
   WITHDRAWN
+}
+
+/// Where a lead came from. Deliberately a small closed set — "other" plus a
+/// note beats a free-text field nobody can report on.
+enum LeadSource {
+  REFERRAL
+  WEBSITE
+  TENDER_PORTAL
+  COLD_OUTREACH
+  EXISTING_CLIENT
+  EVENT
+  OTHER
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  DISQUALIFIED
+  CONVERTED
+}
+
+/// The sales pipeline. Leads live in their own table until qualified, so the
+/// pipeline only ever contains things worth forecasting.
+enum OpportunityStage {
+  QUALIFIED
+  PROPOSAL
+  NEGOTIATION
+  WON
+  LOST
+}
+
+enum ActivityType {
+  CALL
+  EMAIL
+  MEETING
+  NOTE
+  SITE_VISIT
 }
 
 /// Categories for the shared expiry engine (ADR-004). One engine, many uses.
@@ -153,6 +194,10 @@ model Organisation {
   users            User[]
   roles            Role[]
   customers        Customer[]
+  contacts         Contact[]
+  leads            Lead[]
+  opportunities    Opportunity[]
+  activities       Activity[]
   tenders          Tender[]
   documents        Document[]
   complianceItems  ComplianceItem[]
@@ -219,6 +264,9 @@ model User {
   stepEscalationFor  WorkflowStep[]       @relation("StepEscalationUser")
   notifications      Notification[]
   auditLogs          AuditLog[]
+  ownedLeads         Lead[]               @relation("LeadOwner")
+  ownedOpportunities Opportunity[]        @relation("OpportunityOwner")
+  activities         Activity[]           @relation("ActivityOwner")
 
   @@unique([organisationId, email])
   @@index([organisationId])
@@ -345,12 +393,168 @@ model Customer {
   updatedBy    String?      @db.Uuid
   deletedAt    DateTime?    @db.Timestamptz(6)
 
-  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  tenders      Tender[]
+  organisation  Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  tenders       Tender[]
+  contacts      Contact[]
+  opportunities Opportunity[]
+  convertedFromLeads Lead[]   @relation("LeadConvertedCustomer")
 
   @@index([organisationId])
   @@index([organisationId, name])
   @@map("customers")
+}
+
+/// A person at a customer. Separate from User: these are people we sell to,
+/// not people who sign in.
+model Contact {
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  customerId     String  @db.Uuid
+  firstName      String
+  lastName       String
+  jobTitle       String?
+  email          String?
+  phone          String?
+  /// The default person to contact. Enforced in the service, not the schema —
+  /// a partial unique index would block the common "swap the primary" edit.
+  isPrimary      Boolean @default(false)
+  notes          String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation  Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  customer      Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  opportunities Opportunity[]
+
+  @@index([organisationId])
+  @@index([customerId])
+  @@map("contacts")
+}
+
+/// An unqualified enquiry. Lives outside the pipeline until it is qualified,
+/// so forecast figures are never inflated by things nobody has spoken to yet.
+model Lead {
+  id             String     @id @default(uuid()) @db.Uuid
+  organisationId String     @db.Uuid
+  reference      String
+  companyName    String
+  contactName    String?
+  email          String?
+  phone          String?
+  source         LeadSource @default(OTHER)
+  sourceDetail   String?
+  status         LeadStatus @default(NEW)
+  description    String?
+
+  estimatedValueCents BigInt?
+  ownerId             String? @db.Uuid
+
+  /// Set when the lead becomes a customer and an opportunity. Both are
+  /// recorded so the trail from enquiry to revenue stays intact.
+  convertedAt           DateTime? @db.Timestamptz(6)
+  convertedCustomerId   String?   @db.Uuid
+  convertedOpportunityId String?  @db.Uuid
+  disqualifiedReason    String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation        Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  owner               User?        @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  convertedCustomer   Customer?    @relation("LeadConvertedCustomer", fields: [convertedCustomerId], references: [id], onDelete: SetNull)
+  convertedOpportunity Opportunity? @relation("LeadConvertedOpportunity", fields: [convertedOpportunityId], references: [id], onDelete: SetNull)
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([organisationId, status])
+  @@map("leads")
+}
+
+/// A qualified deal being worked. This is what the forecast is built from.
+model Opportunity {
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  reference      String
+  title          String
+  description    String?
+  customerId     String  @db.Uuid
+  contactId      String? @db.Uuid
+  ownerId        String? @db.Uuid
+
+  valueCents      BigInt?
+  currency        String           @default("ZAR")
+  /// 0-100. Weighted pipeline is value × probability, computed in SQL.
+  probability     Int              @default(50)
+  expectedCloseAt DateTime?        @db.Timestamptz(6)
+  stage           OpportunityStage @default(QUALIFIED)
+  source          LeadSource?
+
+  /// The tender this opportunity is being pursued through, when there is one.
+  /// A public-sector deal is usually both: a relationship and a bid.
+  tenderId String? @db.Uuid
+
+  closedAt   DateTime? @db.Timestamptz(6)
+  lostReason String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  owner        User?        @relation("OpportunityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  tender       Tender?      @relation(fields: [tenderId], references: [id], onDelete: SetNull)
+
+  convertedFromLead Lead[] @relation("LeadConvertedOpportunity")
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([organisationId, stage])
+  @@index([organisationId, expectedCloseAt])
+  @@index([customerId])
+  @@map("opportunities")
+}
+
+/// Calls, emails, meetings and notes. Polymorphic like documents (ADR-003), so
+/// the same timeline serves leads, customers, contacts and opportunities — and
+/// later projects and tenders without a second table.
+model Activity {
+  id             String       @id @default(uuid()) @db.Uuid
+  organisationId String       @db.Uuid
+  entityType     EntityType
+  entityId       String       @db.Uuid
+  type           ActivityType
+  subject        String
+  body           String?
+  occurredAt     DateTime     @default(now()) @db.Timestamptz(6)
+  ownerId        String?      @db.Uuid
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  owner        User?        @relation("ActivityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@index([organisationId, entityType, entityId, occurredAt])
+  @@map("activities")
 }
 
 // ---------------------------------------------------------------------------
@@ -391,7 +595,8 @@ model Tender {
   customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
   owner        User?        @relation("TenderOwner", fields: [ownerId], references: [id], onDelete: SetNull)
 
-  requirements TenderRequirement[]
+  requirements  TenderRequirement[]
+  opportunities Opportunity[]
 
   @@unique([organisationId, reference])
   @@index([organisationId])

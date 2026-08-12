@@ -44,7 +44,7 @@ export async function tenderPipelineSummary(): Promise<TenderPipelineSummary> {
       ) AS open_count,
       COALESCE(SUM("estimatedValueCents") FILTER (
         WHERE status IN ('IDENTIFIED','IN_PROGRESS','PENDING_APPROVAL','APPROVED')
-      ), 0) AS open_value_cents,
+      ), 0)::bigint AS open_value_cents,
       COUNT(*) FILTER (WHERE status = 'PENDING_APPROVAL') AS awaiting_approval,
       COUNT(*) FILTER (
         WHERE status NOT IN ('WON','LOST','NO_BID','WITHDRAWN','SUBMITTED')
@@ -80,7 +80,7 @@ export async function tenderWinRate(): Promise<WinRate> {
     SELECT
       COUNT(*) FILTER (WHERE status = 'WON')  AS won,
       COUNT(*) FILTER (WHERE status = 'LOST') AS lost,
-      COALESCE(SUM("awardedValueCents") FILTER (WHERE status = 'WON'), 0)
+      COALESCE(SUM("awardedValueCents") FILTER (WHERE status = 'WON'), 0)::bigint
         AS won_value_cents
     FROM tenders
     WHERE "organisationId" = ${tenant()}::uuid
@@ -111,7 +111,7 @@ export async function tendersByStatus(): Promise<StatusBreakdownRow[]> {
   >(Prisma.sql`
     SELECT status,
            COUNT(*) AS count,
-           COALESCE(SUM("estimatedValueCents"), 0) AS value_cents
+           COALESCE(SUM("estimatedValueCents"), 0)::bigint AS value_cents
     FROM tenders
     WHERE "organisationId" = ${tenant()}::uuid
       AND "deletedAt" IS NULL
@@ -223,6 +223,136 @@ export async function attentionRequired(): Promise<AttentionItem[]> {
   return items.sort(
     (a, b) => severityRank[a.severity] - severityRank[b.severity],
   );
+}
+
+// ---------------------------------------------------------------------------
+// CRM
+// ---------------------------------------------------------------------------
+
+export interface PipelineStageRow {
+  stage: string;
+  count: number;
+  valueCents: bigint;
+  /// value × probability, which is the number a forecast should be built on.
+  weightedCents: bigint;
+}
+
+export async function pipelineByStage(): Promise<PipelineStageRow[]> {
+  const rows = await db.$queryRaw<
+    Array<{
+      stage: string;
+      count: bigint;
+      value_cents: bigint | null;
+      weighted_cents: bigint | null;
+    }>
+  >(Prisma.sql`
+    SELECT stage,
+           COUNT(*) AS count,
+           COALESCE(SUM("valueCents"), 0)::bigint AS value_cents,
+           COALESCE(SUM(("valueCents" * probability) / 100), 0)::bigint AS weighted_cents
+    FROM opportunities
+    WHERE "organisationId" = ${tenant()}::uuid
+      AND "deletedAt" IS NULL
+      AND stage IN ('QUALIFIED','PROPOSAL','NEGOTIATION')
+    GROUP BY stage
+  `);
+
+  const order = ["QUALIFIED", "PROPOSAL", "NEGOTIATION"];
+  return rows
+    .map((r) => ({
+      stage: r.stage,
+      count: Number(r.count),
+      valueCents: r.value_cents ?? 0n,
+      weightedCents: r.weighted_cents ?? 0n,
+    }))
+    .sort((a, b) => order.indexOf(a.stage) - order.indexOf(b.stage));
+}
+
+export interface CrmSummary {
+  openDeals: number;
+  openValueCents: bigint;
+  weightedValueCents: bigint;
+  /// Open leads that nobody has qualified or disqualified yet.
+  unworkedLeads: number;
+  wonThisYear: number;
+  wonValueCentsThisYear: bigint;
+  winRatePercent: number | null;
+}
+
+export async function crmSummary(): Promise<CrmSummary> {
+  const organisationId = tenant();
+
+  const [pipeline] = await db.$queryRaw<
+    Array<{
+      open_deals: bigint;
+      open_value: bigint | null;
+      weighted_value: bigint | null;
+      won_count: bigint;
+      lost_count: bigint;
+      won_value: bigint | null;
+    }>
+  >(Prisma.sql`
+    SELECT
+      COUNT(*) FILTER (WHERE stage IN ('QUALIFIED','PROPOSAL','NEGOTIATION'))
+        AS open_deals,
+      COALESCE(SUM("valueCents") FILTER (
+        WHERE stage IN ('QUALIFIED','PROPOSAL','NEGOTIATION')), 0)::bigint AS open_value,
+      COALESCE(SUM(("valueCents" * probability) / 100) FILTER (
+        WHERE stage IN ('QUALIFIED','PROPOSAL','NEGOTIATION')), 0)::bigint AS weighted_value,
+      COUNT(*) FILTER (
+        WHERE stage = 'WON' AND "closedAt" >= date_trunc('year', NOW())) AS won_count,
+      COUNT(*) FILTER (
+        WHERE stage = 'LOST' AND "closedAt" >= date_trunc('year', NOW())) AS lost_count,
+      COALESCE(SUM("valueCents") FILTER (
+        WHERE stage = 'WON' AND "closedAt" >= date_trunc('year', NOW())), 0)::bigint AS won_value
+    FROM opportunities
+    WHERE "organisationId" = ${organisationId}::uuid
+      AND "deletedAt" IS NULL
+  `);
+
+  const [leads] = await db.$queryRaw<Array<{ unworked: bigint }>>(Prisma.sql`
+    SELECT COUNT(*) AS unworked
+    FROM leads
+    WHERE "organisationId" = ${organisationId}::uuid
+      AND "deletedAt" IS NULL
+      AND status IN ('NEW','CONTACTED')
+  `);
+
+  const won = Number(pipeline?.won_count ?? 0);
+  const lost = Number(pipeline?.lost_count ?? 0);
+  const decided = won + lost;
+
+  return {
+    openDeals: Number(pipeline?.open_deals ?? 0),
+    openValueCents: pipeline?.open_value ?? 0n,
+    weightedValueCents: pipeline?.weighted_value ?? 0n,
+    unworkedLeads: Number(leads?.unworked ?? 0),
+    wonThisYear: won,
+    wonValueCentsThisYear: pipeline?.won_value ?? 0n,
+    winRatePercent: decided === 0 ? null : Math.round((won / decided) * 100),
+  };
+}
+
+export interface LeadFunnelRow {
+  status: string;
+  count: number;
+}
+
+export async function leadFunnel(): Promise<LeadFunnelRow[]> {
+  const rows = await db.$queryRaw<Array<{ status: string; count: bigint }>>(
+    Prisma.sql`
+      SELECT status, COUNT(*) AS count
+      FROM leads
+      WHERE "organisationId" = ${tenant()}::uuid
+        AND "deletedAt" IS NULL
+      GROUP BY status
+    `,
+  );
+
+  const order = ["NEW", "CONTACTED", "QUALIFIED", "CONVERTED", "DISQUALIFIED"];
+  return rows
+    .map((r) => ({ status: r.status, count: Number(r.count) }))
+    .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status));
 }
 
 export interface ComplianceSummary {

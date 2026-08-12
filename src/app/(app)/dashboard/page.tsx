@@ -3,6 +3,7 @@ import { withSession } from "@/lib/auth/session";
 import {
   attentionRequired,
   complianceSummary,
+  crmSummary,
   tenderPipelineSummary,
   tenderWinRate,
   tendersByStatus,
@@ -46,9 +47,10 @@ export default async function DashboardPage() {
     byStatus: await tendersByStatus(),
     attention: await attentionRequired(),
     compliance: await complianceSummary(),
+    crm: await crmSummary(),
   }));
 
-  const { pipeline, winRate, byStatus, attention, compliance } = data;
+  const { pipeline, winRate, byStatus, attention, compliance, crm } = data;
   const maxCount = Math.max(1, ...byStatus.map((r) => r.count));
 
   return (
@@ -81,6 +83,33 @@ export default async function DashboardPage() {
           value={winRate.ratePercent === null ? "—" : `${winRate.ratePercent}%`}
           hint={`${winRate.won} won · ${winRate.lost} lost`}
           tone="success"
+        />
+      </div>
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatTile
+          label="Sales pipeline"
+          value={formatCentsCompact(crm.openValueCents)}
+          hint={`${crm.openDeals} open deals`}
+        />
+        <StatTile
+          label="Weighted forecast"
+          value={formatCentsCompact(crm.weightedValueCents)}
+          hint="Value × probability"
+          tone="success"
+        />
+        <StatTile
+          label="Unworked leads"
+          value={String(crm.unworkedLeads)}
+          hint="Not yet qualified"
+          tone={crm.unworkedLeads > 0 ? "warning" : "default"}
+        />
+        <StatTile
+          label="Won this year"
+          value={formatCentsCompact(crm.wonValueCentsThisYear)}
+          hint={`${crm.wonThisYear} deals · ${
+            crm.winRatePercent === null ? "—" : `${crm.winRatePercent}% win rate`
+          }`}
         />
       </div>
 

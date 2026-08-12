@@ -84,7 +84,7 @@ Blob, Resend, Sentry) rather than on design decisions.
 - [x] `audit_logs` contains a complete, readable chain for the tender's life
 - [x] Deleting a tender sets `deleted_at` and it vanishes from lists, but the
       row and its audit history remain
-- [ ] Both dashboard widgets read from the metrics layer, not from Prisma
+- [x] Both dashboard widgets read from the metrics layer, not from Prisma
 - [ ] The cron job runs on Vercel and emits a 30-day expiry warning
 - [ ] Sentry captures a deliberately thrown error in production
 
@@ -92,9 +92,13 @@ Blob, Resend, Sentry) rather than on design decisions.
 
 Cut ruthlessly. These are Phase 2+ and adding them now defeats the purpose:
 
-CRM, HR, Projects, Procurement, Inventory, Assets, Finance, HSE, tender pricing
+HR, Projects, Procurement, Inventory, Assets, Finance, HSE, tender pricing
 build-up, proposal document generation, configurable dashboards, report builder,
 exports, SMS or WhatsApp channels, bulk import, and search.
+
+CRM was on this list and has since been built — see "Beyond the skeleton"
+below. It was cut from the skeleton deliberately and added only once the
+skeleton's acceptance criteria held.
 
 ## Two stages
 
@@ -125,3 +129,20 @@ Bad seed data is the single most common reason a working demo lands badly.
 Take notes on every place Nopedi says "actually, we do it differently." That
 list is the real requirements document, and it is worth more than the spec we
 started from.
+
+## Beyond the skeleton
+
+**CRM shipped after the skeleton passed**, as the next module in the phase order
+(Foundation → Tenders → CRM → Projects → HR). Leads, contacts, opportunities and
+a polymorphic activity timeline, with lead conversion creating the customer and
+the opportunity rather than asking anyone to retype them.
+
+It is worth recording what building it cost, because that is the return on the
+foundation. No changes were needed to the tenancy extension, the audit trail,
+the soft-delete rules, the permission mechanism or the reference-number
+generator. Four models were added to `model-metadata.ts` — and the parity test
+would have failed the build had they not been. Everything else was schema,
+services, screens and tests.
+
+That is the claim the walking skeleton was built to test, now with evidence:
+each module after the first is CRUD on proven rails.
