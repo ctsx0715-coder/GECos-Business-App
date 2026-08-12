@@ -92,13 +92,13 @@ Blob, Resend, Sentry) rather than on design decisions.
 
 Cut ruthlessly. These are Phase 2+ and adding them now defeats the purpose:
 
-HR, Projects, Procurement, Inventory, Assets, Finance, HSE, tender pricing
+HR, Procurement, Inventory, Assets, Finance, HSE, tender pricing
 build-up, proposal document generation, configurable dashboards, report builder,
 exports, SMS or WhatsApp channels, bulk import, and search.
 
-CRM was on this list and has since been built — see "Beyond the skeleton"
-below. It was cut from the skeleton deliberately and added only once the
-skeleton's acceptance criteria held.
+CRM and Projects were on this list and have since been built — see "Beyond
+the skeleton" below. Both were cut from the skeleton deliberately and added
+only once its acceptance criteria held.
 
 ## Two stages
 
@@ -144,5 +144,16 @@ generator. Four models were added to `model-metadata.ts` — and the parity test
 would have failed the build had they not been. Everything else was schema,
 services, screens and tests.
 
-That is the claim the walking skeleton was built to test, now with evidence:
-each module after the first is CRUD on proven rails.
+**Projects followed**, completing the thread: a won tender becomes a project
+carrying its customer, awarded value and a link back to the bid. Tasks,
+milestones, team and costs, with a budget that counts approved spend as
+committed rather than waiting for invoices to be paid — a budget that only
+counts what has been paid tells a manager they are fine right up until the
+invoices arrive.
+
+Projects needed no platform changes either. Five models registered, and the
+same separation-of-duties pattern the tender approvals use was reapplied to
+expense approval without touching the mechanism.
+
+That is the claim the walking skeleton was built to test, now with evidence
+from two modules: each one after the first is CRUD on proven rails.

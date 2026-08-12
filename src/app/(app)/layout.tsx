@@ -73,6 +73,12 @@ const NAV: NavItem[] = [
     permission: "tenders.tender.approve",
   },
   {
+    href: "/projects",
+    label: "Projects",
+    moduleKey: "projects",
+    permission: "projects.project.view",
+  },
+  {
     href: "/compliance",
     label: "Compliance",
     moduleKey: "core",

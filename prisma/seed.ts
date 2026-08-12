@@ -61,6 +61,7 @@ async function seedTenant(params: {
             MODULES.CORE,
             MODULES.TENDERS,
             MODULES.CRM,
+            MODULES.PROJECTS,
             MODULES.DOCUMENTS,
             MODULES.REPORTS,
           ].includes(moduleKey as never),
@@ -170,6 +171,7 @@ async function main() {
       { roleKey: "executive", firstName: "Thato", lastName: "Chokoe", jobTitle: "Managing Director" },
       { roleKey: "finance_manager", firstName: "Lerato", lastName: "Mokoena", jobTitle: "Finance Manager" },
       { roleKey: "sales_manager", firstName: "Bongani", lastName: "Sithole", jobTitle: "Sales Manager" },
+      { roleKey: "project_manager", firstName: "Zanele", lastName: "Khoza", jobTitle: "Project Manager" },
       { roleKey: "tender_officer", firstName: "Sipho", lastName: "Ndlovu", jobTitle: "Tender Officer" },
       { roleKey: "employee", firstName: "Anele", lastName: "Dlamini", jobTitle: "Site Supervisor" },
     ],
@@ -531,6 +533,209 @@ async function main() {
       });
     }
 
+    // ---- Projects ----------------------------------------------------------
+    // Two of these come from won tenders, so the thread from bid to delivery is
+    // visible rather than asserted. One is deliberately over budget.
+    const wonTenders = await db.tender.findMany({
+      where: { status: "WON" },
+      select: { id: true, title: true, customerId: true, awardedValueCents: true },
+    });
+
+    const projectSpecs: Array<{
+      name: string;
+      customer: string;
+      fromTenderTitle?: string;
+      contractRands: number;
+      budgetRands: number;
+      status: "PLANNING" | "ACTIVE" | "ON_HOLD";
+      startInDays: number;
+      endInDays: number;
+      percentComplete: number;
+      /** Approved spend, which is what counts against the budget. */
+      spend: Array<{ description: string; category: "LABOUR" | "MATERIALS" | "PLANT" | "SUBCONTRACTOR" | "TRANSPORT"; rands: number; status: "APPROVED" | "PAID" | "SUBMITTED" }>;
+      tasks: Array<{ title: string; status: "TODO" | "IN_PROGRESS" | "BLOCKED" | "DONE"; dueInDays: number; blockedReason?: string }>;
+    }> = [
+      {
+        name: "Water treatment works upgrade",
+        customer: "City of Tshwane",
+        fromTenderTitle: "Water treatment works upgrade",
+        contractRands: 14_200_000,
+        budgetRands: 11_400_000,
+        status: "ACTIVE",
+        startInDays: -40,
+        endInDays: 95,
+        percentComplete: 45,
+        spend: [
+          { description: "Filtration media supply", category: "MATERIALS", rands: 2_850_000, status: "PAID" },
+          { description: "Civils subcontract, phase 1", category: "SUBCONTRACTOR", rands: 1_900_000, status: "PAID" },
+          { description: "Site team, months 1–2", category: "LABOUR", rands: 980_000, status: "APPROVED" },
+          { description: "Crane hire", category: "PLANT", rands: 320_000, status: "SUBMITTED" },
+        ],
+        tasks: [
+          { title: "Site establishment", status: "DONE", dueInDays: -35 },
+          { title: "Demolish existing filter beds", status: "DONE", dueInDays: -14 },
+          { title: "Install filtration media", status: "IN_PROGRESS", dueInDays: 12 },
+          { title: "Commission control system", status: "TODO", dueInDays: 60 },
+          { title: "As-built drawings", status: "TODO", dueInDays: 88 },
+        ],
+      },
+      {
+        name: "MV switchgear replacement",
+        customer: "Eskom Holdings SOC Ltd",
+        fromTenderTitle: "MV switchgear replacement",
+        contractRands: 7_800_000,
+        budgetRands: 6_100_000,
+        status: "ACTIVE",
+        startInDays: -58,
+        endInDays: -4,
+        percentComplete: 90,
+        spend: [
+          { description: "Switchgear panels", category: "MATERIALS", rands: 4_200_000, status: "PAID" },
+          { description: "Specialist commissioning", category: "SUBCONTRACTOR", rands: 1_450_000, status: "PAID" },
+          { description: "Extended outage standby crew", category: "LABOUR", rands: 890_000, status: "APPROVED" },
+        ],
+        tasks: [
+          { title: "Factory acceptance test", status: "DONE", dueInDays: -40 },
+          { title: "Outage window 1", status: "DONE", dueInDays: -22 },
+          { title: "Protection settings sign-off", status: "BLOCKED", dueInDays: -6, blockedReason: "Awaiting client's protection engineer to countersign." },
+          { title: "Handover pack", status: "TODO", dueInDays: 5 },
+        ],
+      },
+      {
+        name: "Pump station refurbishment",
+        customer: "Transnet SOC Ltd",
+        fromTenderTitle: "Pump station refurbishment",
+        contractRands: 9_900_000,
+        budgetRands: 7_900_000,
+        status: "PLANNING",
+        startInDays: 14,
+        endInDays: 160,
+        percentComplete: 5,
+        spend: [
+          { description: "Advance order — pump units", category: "MATERIALS", rands: 1_100_000, status: "APPROVED" },
+        ],
+        tasks: [
+          { title: "Confirm long-lead items", status: "IN_PROGRESS", dueInDays: 9 },
+          { title: "Mobilisation plan", status: "TODO", dueInDays: 20 },
+        ],
+      },
+    ];
+
+    let projectCounter = 0;
+    let expenseCounter = 0;
+
+    for (const spec of projectSpecs) {
+      projectCounter += 1;
+      const tender = spec.fromTenderTitle
+        ? wonTenders.find((t) => t.title === spec.fromTenderTitle)
+        : undefined;
+
+      const project = await db.project.create({
+        data: {
+          organisationId: nopedi.organisation.id,
+          reference: `PRJ-${year}-${String(projectCounter).padStart(4, "0")}`,
+          name: spec.name,
+          customerId: customerIds.get(spec.customer)!,
+          tenderId: tender?.id,
+          managerId: nopedi.userIds.project_manager,
+          contractValueCents: BigInt(spec.contractRands * 100),
+          budgetCents: BigInt(spec.budgetRands * 100),
+          status: spec.status,
+          startsAt: days(spec.startInDays),
+          endsAt: days(spec.endInDays),
+          percentComplete: spec.percentComplete,
+        },
+      });
+
+      for (const person of [
+        { key: "project_manager", role: "MANAGER" as const, allocation: 60 },
+        { key: "employee", role: "SUPERVISOR" as const, allocation: 100 },
+      ]) {
+        await db.projectMember.create({
+          data: {
+            organisationId: nopedi.organisation.id,
+            projectId: project.id,
+            userId: nopedi.userIds[person.key],
+            role: person.role,
+            allocation: person.allocation,
+          },
+        });
+      }
+
+      for (const [index, task] of spec.tasks.entries()) {
+        await db.projectTask.create({
+          data: {
+            organisationId: nopedi.organisation.id,
+            projectId: project.id,
+            title: task.title,
+            status: task.status,
+            dueAt: days(task.dueInDays),
+            completedAt: task.status === "DONE" ? days(task.dueInDays) : null,
+            blockedReason: task.blockedReason,
+            assigneeId:
+              index % 2 === 0
+                ? nopedi.userIds.employee
+                : nopedi.userIds.project_manager,
+            sortOrder: index,
+          },
+        });
+      }
+
+      for (const cost of spec.spend) {
+        expenseCounter += 1;
+        const decided = cost.status !== "SUBMITTED";
+        await db.projectExpense.create({
+          data: {
+            organisationId: nopedi.organisation.id,
+            projectId: project.id,
+            reference: `EXP-${year}-${String(expenseCounter).padStart(4, "0")}`,
+            description: cost.description,
+            category: cost.category,
+            amountCents: BigInt(cost.rands * 100),
+            status: cost.status,
+            incurredAt: days(-Math.floor(Math.random() * 40) - 2),
+            submittedById: nopedi.userIds.employee,
+            approvedById: decided ? nopedi.userIds.project_manager : null,
+            approvedAt: decided ? days(-3) : null,
+          },
+        });
+      }
+
+      await db.projectMilestone.create({
+        data: {
+          organisationId: nopedi.organisation.id,
+          projectId: project.id,
+          name: "Practical completion",
+          dueAt: days(spec.endInDays),
+          isPaymentMilestone: true,
+          valueCents: BigInt(Math.round(spec.contractRands * 0.3) * 100),
+          sortOrder: 0,
+        },
+      });
+    }
+
+    for (const [prefix, count] of [
+      ["PRJ", projectCounter],
+      ["EXP", expenseCounter],
+    ] as const) {
+      await db.referenceSequence.upsert({
+        where: {
+          organisationId_prefix_year: {
+            organisationId: nopedi.organisation.id,
+            prefix,
+            year,
+          },
+        },
+        create: {
+          organisationId: nopedi.organisation.id,
+          prefix,
+          year,
+          lastNumber: count,
+        },
+        update: { lastNumber: count },
+      });
+    }
+
     // Expiring company compliance, which the dashboard surfaces and which the
     // same engine will later drive for HR and HSE (ADR-004).
     const compliance = [
@@ -596,9 +801,15 @@ async function main() {
     users: await rawDb.user.count(),
     tenders: await rawDb.tender.count(),
     approvals: await rawDb.workflowApproval.count(),
+    customers: await rawDb.customer.count(),
+    leads: await rawDb.lead.count(),
+    opportunities: await rawDb.opportunity.count(),
+    projects: await rawDb.project.count(),
+    tasks: await rawDb.projectTask.count(),
+    expenses: await rawDb.projectExpense.count(),
   };
   console.log("Done:", counts);
-  console.log("\nSign in as any of these at http://localhost:3000");
+
 }
 
 main()

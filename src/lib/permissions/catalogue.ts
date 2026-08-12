@@ -68,6 +68,22 @@ export const PERMISSIONS = {
   /// Record the outcome once the client has decided.
   "tenders.tender.record_outcome": MODULES.TENDERS,
 
+  // Projects
+  "projects.project.view": MODULES.PROJECTS,
+  "projects.project.create": MODULES.PROJECTS,
+  "projects.project.edit": MODULES.PROJECTS,
+  "projects.project.delete": MODULES.PROJECTS,
+  /// Close a project out. Separate from editing.
+  "projects.project.close": MODULES.PROJECTS,
+  "projects.team.manage": MODULES.PROJECTS,
+  "projects.task.view": MODULES.PROJECTS,
+  "projects.task.manage": MODULES.PROJECTS,
+  "projects.expense.view": MODULES.PROJECTS,
+  "projects.expense.submit": MODULES.PROJECTS,
+  /// Approving spend is what commits it against the budget, so it is its own
+  /// permission rather than part of editing a project.
+  "projects.expense.approve": MODULES.PROJECTS,
+
   // Documents
   "documents.document.view": MODULES.DOCUMENTS,
   "documents.document.upload": MODULES.DOCUMENTS,
@@ -155,9 +171,36 @@ export const SYSTEM_ROLES: Record<
       "reports.export",
     ],
   },
+  project_manager: {
+    name: "Project Manager",
+    description: "Delivers the work and owns the budget.",
+    permissions: [
+      "projects.project.view",
+      "projects.project.create",
+      "projects.project.edit",
+      "projects.project.close",
+      "projects.team.manage",
+      "projects.task.view",
+      "projects.task.manage",
+      "projects.expense.view",
+      "projects.expense.submit",
+      "projects.expense.approve",
+      "crm.customer.view",
+      "crm.contact.view",
+      "tenders.tender.view",
+      "documents.document.view",
+      "documents.document.upload",
+      "reports.dashboard.view",
+    ],
+  },
   employee: {
     name: "Employee",
     description: "Baseline access for everyone.",
-    permissions: ["reports.dashboard.view", "documents.document.view"],
+    permissions: [
+      "reports.dashboard.view",
+      "documents.document.view",
+      "projects.task.view",
+      "projects.expense.submit",
+    ],
   },
 };

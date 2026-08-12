@@ -355,6 +355,163 @@ export async function leadFunnel(): Promise<LeadFunnelRow[]> {
     .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status));
 }
 
+// ---------------------------------------------------------------------------
+// Projects
+// ---------------------------------------------------------------------------
+
+export interface ProjectPortfolioSummary {
+  activeProjects: number;
+  contractValueCents: bigint;
+  budgetCents: bigint;
+  committedCents: bigint;
+  /// Active projects whose committed spend already exceeds their budget.
+  overBudgetCount: number;
+  overdueTasks: number;
+  blockedTasks: number;
+}
+
+/**
+ * The portfolio view.
+ *
+ * Committed spend counts APPROVED as well as PAID, matching the service: an
+ * approved cost is money gone whether or not the invoice has cleared.
+ */
+export async function projectPortfolio(): Promise<ProjectPortfolioSummary> {
+  const organisationId = tenant();
+
+  const [totals] = await db.$queryRaw<
+    Array<{
+      active: bigint;
+      contract_value: bigint | null;
+      budget: bigint | null;
+      committed: bigint | null;
+      over_budget: bigint;
+    }>
+  >(Prisma.sql`
+    WITH spend AS (
+      SELECT "projectId", SUM("amountCents") AS committed
+      FROM project_expenses
+      WHERE "organisationId" = ${organisationId}::uuid
+        AND "deletedAt" IS NULL
+        AND status IN ('APPROVED','PAID')
+      GROUP BY "projectId"
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE p.status IN ('PLANNING','ACTIVE','ON_HOLD'))::bigint
+        AS active,
+      COALESCE(SUM(p."contractValueCents") FILTER (
+        WHERE p.status IN ('PLANNING','ACTIVE','ON_HOLD')), 0)::bigint
+        AS contract_value,
+      COALESCE(SUM(p."budgetCents") FILTER (
+        WHERE p.status IN ('PLANNING','ACTIVE','ON_HOLD')), 0)::bigint AS budget,
+      COALESCE(SUM(s.committed) FILTER (
+        WHERE p.status IN ('PLANNING','ACTIVE','ON_HOLD')), 0)::bigint AS committed,
+      COUNT(*) FILTER (
+        WHERE p.status IN ('PLANNING','ACTIVE','ON_HOLD')
+          AND p."budgetCents" IS NOT NULL
+          AND COALESCE(s.committed, 0) > p."budgetCents")::bigint AS over_budget
+    FROM projects p
+    LEFT JOIN spend s ON s."projectId" = p.id
+    WHERE p."organisationId" = ${organisationId}::uuid
+      AND p."deletedAt" IS NULL
+  `);
+
+  const [tasks] = await db.$queryRaw<
+    Array<{ overdue: bigint; blocked: bigint }>
+  >(Prisma.sql`
+    SELECT
+      COUNT(*) FILTER (
+        WHERE t.status <> 'DONE' AND t."dueAt" < NOW())::bigint AS overdue,
+      COUNT(*) FILTER (WHERE t.status = 'BLOCKED')::bigint AS blocked
+    FROM project_tasks t
+    WHERE t."organisationId" = ${organisationId}::uuid
+      AND t."deletedAt" IS NULL
+  `);
+
+  return {
+    activeProjects: Number(totals?.active ?? 0),
+    contractValueCents: totals?.contract_value ?? 0n,
+    budgetCents: totals?.budget ?? 0n,
+    committedCents: totals?.committed ?? 0n,
+    overBudgetCount: Number(totals?.over_budget ?? 0),
+    overdueTasks: Number(tasks?.overdue ?? 0),
+    blockedTasks: Number(tasks?.blocked ?? 0),
+  };
+}
+
+export interface ProjectBudgetRow {
+  id: string;
+  reference: string;
+  name: string;
+  customerName: string;
+  status: string;
+  percentComplete: number;
+  contractValueCents: bigint;
+  budgetCents: bigint;
+  committedCents: bigint;
+  percentUsed: number;
+  isOverBudget: boolean;
+}
+
+/** Budget against spend for every live project, in one query. */
+export async function projectBudgets(): Promise<ProjectBudgetRow[]> {
+  const rows = await db.$queryRaw<
+    Array<{
+      id: string;
+      reference: string;
+      name: string;
+      customer_name: string;
+      status: string;
+      percent_complete: number;
+      contract_value: bigint | null;
+      budget: bigint | null;
+      committed: bigint | null;
+    }>
+  >(Prisma.sql`
+    WITH spend AS (
+      SELECT "projectId", SUM("amountCents") AS committed
+      FROM project_expenses
+      WHERE "organisationId" = ${tenant()}::uuid
+        AND "deletedAt" IS NULL
+        AND status IN ('APPROVED','PAID')
+      GROUP BY "projectId"
+    )
+    SELECT p.id, p.reference, p.name, c.name AS customer_name, p.status,
+           p."percentComplete" AS percent_complete,
+           p."contractValueCents" AS contract_value,
+           p."budgetCents" AS budget,
+           COALESCE(s.committed, 0)::bigint AS committed
+    FROM projects p
+    JOIN customers c ON c.id = p."customerId"
+    LEFT JOIN spend s ON s."projectId" = p.id
+    WHERE p."organisationId" = ${tenant()}::uuid
+      AND p."deletedAt" IS NULL
+      AND p.status IN ('PLANNING','ACTIVE','ON_HOLD')
+    ORDER BY p."endsAt" ASC NULLS LAST
+  `);
+
+  return rows.map((r) => {
+    const budget = r.budget ?? 0n;
+    const committed = r.committed ?? 0n;
+    return {
+      id: r.id,
+      reference: r.reference,
+      name: r.name,
+      customerName: r.customer_name,
+      status: r.status,
+      percentComplete: r.percent_complete,
+      contractValueCents: r.contract_value ?? 0n,
+      budgetCents: budget,
+      committedCents: committed,
+      percentUsed:
+        budget === 0n
+          ? 0
+          : Math.round((Number(committed) / Number(budget)) * 100),
+      isOverBudget: budget > 0n && committed > budget,
+    };
+  });
+}
+
 export interface ComplianceSummary {
   total: number;
   valid: number;

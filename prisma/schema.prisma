@@ -98,6 +98,57 @@ enum ActivityType {
   SITE_VISIT
 }
 
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+/// What the money was spent on. Deliberately the categories a contractor
+/// actually reports against, not a general ledger.
+enum ExpenseCategory {
+  LABOUR
+  MATERIALS
+  PLANT
+  SUBCONTRACTOR
+  TRANSPORT
+  OTHER
+}
+
+/// Committed spend counts against the budget from APPROVED onward: an approved
+/// purchase is money gone, whether or not the invoice has been paid.
+enum ExpenseStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  PAID
+}
+
+enum ProjectRole {
+  MANAGER
+  ENGINEER
+  SUPERVISOR
+  FOREMAN
+  MEMBER
+}
+
 /// Categories for the shared expiry engine (ADR-004). One engine, many uses.
 enum ComplianceCategory {
   TRAINING
@@ -198,6 +249,7 @@ model Organisation {
   leads            Lead[]
   opportunities    Opportunity[]
   activities       Activity[]
+  projects         Project[]
   tenders          Tender[]
   documents        Document[]
   complianceItems  ComplianceItem[]
@@ -267,6 +319,11 @@ model User {
   ownedLeads         Lead[]               @relation("LeadOwner")
   ownedOpportunities Opportunity[]        @relation("OpportunityOwner")
   activities         Activity[]           @relation("ActivityOwner")
+  managedProjects    Project[]            @relation("ProjectManager")
+  projectMemberships ProjectMember[]
+  assignedTasks      ProjectTask[]        @relation("TaskAssignee")
+  submittedExpenses  ProjectExpense[]     @relation("ExpenseSubmitter")
+  approvedExpenses   ProjectExpense[]     @relation("ExpenseApprover")
 
   @@unique([organisationId, email])
   @@index([organisationId])
@@ -397,6 +454,7 @@ model Customer {
   tenders       Tender[]
   contacts      Contact[]
   opportunities Opportunity[]
+  projects      Project[]
   convertedFromLeads Lead[]   @relation("LeadConvertedCustomer")
 
   @@index([organisationId])
@@ -518,7 +576,8 @@ model Opportunity {
   owner        User?        @relation("OpportunityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   tender       Tender?      @relation(fields: [tenderId], references: [id], onDelete: SetNull)
 
-  convertedFromLead Lead[] @relation("LeadConvertedOpportunity")
+  convertedFromLead Lead[]    @relation("LeadConvertedOpportunity")
+  projects          Project[]
 
   @@unique([organisationId, reference])
   @@index([organisationId])
@@ -597,6 +656,7 @@ model Tender {
 
   requirements  TenderRequirement[]
   opportunities Opportunity[]
+  projects      Project[]
 
   @@unique([organisationId, reference])
   @@index([organisationId])
@@ -635,6 +695,185 @@ model TenderRequirement {
   @@index([organisationId])
   @@index([tenderId])
   @@map("tender_requirements")
+}
+
+// ---------------------------------------------------------------------------
+// Projects — delivery, and where a won bid becomes work
+// ---------------------------------------------------------------------------
+
+/// A project is the central object of delivery. It carries the thread from
+/// where the work came from: the customer, and optionally the opportunity and
+/// tender it was won through. Nobody retypes the client.
+model Project {
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  reference      String
+  name           String
+  description    String?
+  customerId     String  @db.Uuid
+  /// The bid this was won through, when there was one.
+  tenderId       String? @db.Uuid
+  opportunityId  String? @db.Uuid
+  managerId      String? @db.Uuid
+
+  status    ProjectStatus @default(PLANNING)
+  startsAt  DateTime?     @db.Timestamptz(6)
+  endsAt    DateTime?     @db.Timestamptz(6)
+  closedAt  DateTime?     @db.Timestamptz(6)
+
+  /// What the client pays. Revenue.
+  contractValueCents BigInt?
+  /// What we have allowed ourselves to spend. Cost.
+  budgetCents        BigInt?
+  currency           String  @default("ZAR")
+
+  /// 0-100, entered by the project manager rather than derived from tasks:
+  /// task counts are a poor proxy for physical progress on site.
+  percentComplete Int @default(0)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tender       Tender?      @relation(fields: [tenderId], references: [id], onDelete: SetNull)
+  opportunity  Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  manager      User?        @relation("ProjectManager", fields: [managerId], references: [id], onDelete: SetNull)
+
+  members    ProjectMember[]
+  tasks      ProjectTask[]
+  milestones ProjectMilestone[]
+  expenses   ProjectExpense[]
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([organisationId, status])
+  @@index([customerId])
+  @@map("projects")
+}
+
+/// Who is on the project, and how much of them we have.
+model ProjectMember {
+  id             String      @id @default(uuid()) @db.Uuid
+  organisationId String      @db.Uuid
+  projectId      String      @db.Uuid
+  userId         String      @db.Uuid
+  role           ProjectRole @default(MEMBER)
+  /// Percentage of this person's time committed to the project.
+  allocation     Int         @default(100)
+  joinedAt       DateTime    @default(now()) @db.Timestamptz(6)
+  leftAt         DateTime?   @db.Timestamptz(6)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([organisationId])
+  @@index([userId])
+  @@map("project_members")
+}
+
+model ProjectMilestone {
+  id             String    @id @default(uuid()) @db.Uuid
+  organisationId String    @db.Uuid
+  projectId      String    @db.Uuid
+  name           String
+  description    String?
+  dueAt          DateTime? @db.Timestamptz(6)
+  completedAt    DateTime? @db.Timestamptz(6)
+  sortOrder      Int       @default(0)
+  /// Payment milestones drive invoicing, so they are marked as such.
+  isPaymentMilestone Boolean @default(false)
+  valueCents         BigInt?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks   ProjectTask[]
+
+  @@index([organisationId])
+  @@index([projectId])
+  @@map("project_milestones")
+}
+
+model ProjectTask {
+  id             String       @id @default(uuid()) @db.Uuid
+  organisationId String       @db.Uuid
+  projectId      String       @db.Uuid
+  milestoneId    String?      @db.Uuid
+  title          String
+  description    String?
+  status         TaskStatus   @default(TODO)
+  priority       TaskPriority @default(MEDIUM)
+  assigneeId     String?      @db.Uuid
+  dueAt          DateTime?    @db.Timestamptz(6)
+  completedAt    DateTime?    @db.Timestamptz(6)
+  /// Set when a task is BLOCKED, so a stalled project explains itself.
+  blockedReason  String?
+  sortOrder      Int          @default(0)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  project   Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestone ProjectMilestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  assignee  User?             @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@index([projectId, status])
+  @@index([assigneeId, status])
+  @@map("project_tasks")
+}
+
+/// Cost booked against a project. Approved and paid expenses both count as
+/// committed spend, because an approved cost is money gone.
+model ProjectExpense {
+  id             String          @id @default(uuid()) @db.Uuid
+  organisationId String          @db.Uuid
+  projectId      String          @db.Uuid
+  reference      String
+  description    String
+  category       ExpenseCategory @default(OTHER)
+  amountCents    BigInt
+  currency       String          @default("ZAR")
+  status         ExpenseStatus   @default(DRAFT)
+  incurredAt     DateTime        @db.Timestamptz(6)
+  supplierName   String?
+
+  submittedById String?   @db.Uuid
+  approvedById  String?   @db.Uuid
+  approvedAt    DateTime? @db.Timestamptz(6)
+  rejectedReason String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  submittedBy User?   @relation("ExpenseSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
+  approvedBy  User?   @relation("ExpenseApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([projectId, status])
+  @@map("project_expenses")
 }
 
 // ---------------------------------------------------------------------------

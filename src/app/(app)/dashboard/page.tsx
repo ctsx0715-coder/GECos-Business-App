@@ -4,6 +4,7 @@ import {
   attentionRequired,
   complianceSummary,
   crmSummary,
+  projectPortfolio,
   tenderPipelineSummary,
   tenderWinRate,
   tendersByStatus,
@@ -48,9 +49,11 @@ export default async function DashboardPage() {
     attention: await attentionRequired(),
     compliance: await complianceSummary(),
     crm: await crmSummary(),
+    projects: await projectPortfolio(),
   }));
 
-  const { pipeline, winRate, byStatus, attention, compliance, crm } = data;
+  const { pipeline, winRate, byStatus, attention, compliance, crm, projects } =
+    data;
   const maxCount = Math.max(1, ...byStatus.map((r) => r.count));
 
   return (
@@ -110,6 +113,31 @@ export default async function DashboardPage() {
           hint={`${crm.wonThisYear} deals · ${
             crm.winRatePercent === null ? "—" : `${crm.winRatePercent}% win rate`
           }`}
+        />
+      </div>
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatTile
+          label="Active projects"
+          value={String(projects.activeProjects)}
+          hint={`${formatCentsCompact(projects.contractValueCents)} contracted`}
+        />
+        <StatTile
+          label="Committed spend"
+          value={formatCentsCompact(projects.committedCents)}
+          hint={`of ${formatCentsCompact(projects.budgetCents)} budgeted`}
+        />
+        <StatTile
+          label="Over budget"
+          value={String(projects.overBudgetCount)}
+          hint="Projects past their allowance"
+          tone={projects.overBudgetCount > 0 ? "danger" : "success"}
+        />
+        <StatTile
+          label="Overdue tasks"
+          value={String(projects.overdueTasks)}
+          hint={`${projects.blockedTasks} blocked`}
+          tone={projects.overdueTasks > 0 ? "warning" : "default"}
         />
       </div>
 
