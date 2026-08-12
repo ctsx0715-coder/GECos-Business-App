@@ -26,6 +26,9 @@ async function main() {
     viewport: { width: 1440, height: 1000 },
     deviceScaleFactor: 2,
     colorScheme: "light",
+    // So date inputs render dd/mm/yyyy, as a South African user sees them.
+    locale: "en-ZA",
+    timezoneId: "Africa/Johannesburg",
   });
   const page = await context.newPage();
   page.on("pageerror", (e) => failures.push(`pageerror: ${e.message}`));

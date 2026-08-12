@@ -20,6 +20,8 @@ import {
   SubmitExpense,
   TaskRow,
 } from "./controls";
+import { AddMemberInline, AddMilestoneInline } from "@/components/forms/inline";
+import { formChoices } from "../../create-actions";
 
 const TASK_TONES: Record<string, "neutral" | "accent" | "success" | "danger"> = {
   TODO: "neutral",
@@ -57,6 +59,10 @@ export default async function ProjectDetailPage(props: {
 
   if (!data) notFound();
   const { project, budget, session } = data;
+  const canManageTeam = session.permissions.has("projects.team.manage");
+  const { users } = canManageTeam
+    ? await formChoices()
+    : { users: [] as Array<{ value: string; label: string }> };
 
   const openTasks = project.tasks.filter((t) => t.status !== "DONE");
   const canManageTasks = session.permissions.has("projects.task.manage");
@@ -340,11 +346,19 @@ export default async function ProjectDetailPage(props: {
                 ))}
               </ul>
             )}
+            {canManageTeam && !closed && (
+              <AddMemberInline projectId={project.id} users={users} />
+            )}
           </Card>
 
-          {project.milestones.length > 0 && (
-            <Card>
-              <CardHeader title="Milestones" />
+          <Card>
+            <CardHeader title="Milestones" />
+            {project.milestones.length === 0 ? (
+              <EmptyState
+                title="No milestones"
+                description="Key dates and payment points appear here."
+              />
+            ) : (
               <ul className="divide-y divide-border">
                 {project.milestones.map((milestone) => (
                   <li key={milestone.id} className="px-5 py-3">
@@ -366,8 +380,11 @@ export default async function ProjectDetailPage(props: {
                   </li>
                 ))}
               </ul>
-            </Card>
-          )}
+            )}
+            {canManageTasks && !closed && (
+              <AddMilestoneInline projectId={project.id} />
+            )}
+          </Card>
         </div>
       </div>
     </>

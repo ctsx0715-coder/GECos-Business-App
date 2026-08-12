@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { withSession } from "@/lib/auth/session";
 import { crmService } from "@/modules/crm/crm.service";
-import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
+import { Badge, ButtonLink, Card, EmptyState, PageHeader } from "@/components/ui";
 
 /**
  * The customer list.
@@ -11,13 +11,23 @@ import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
  * everywhere" principle made visible.
  */
 export default async function CustomersPage() {
-  const customers = await withSession(() => crmService.listCustomers());
+  const { customers, canCreate } = await withSession(async (session) => ({
+    customers: await crmService.listCustomers(),
+    canCreate: session.permissions.has("crm.customer.create"),
+  }));
 
   return (
     <>
       <PageHeader
         title="Customers"
         description={`${customers.length} on the books`}
+        action={
+          canCreate ? (
+            <ButtonLink href="/crm/customers/new" variant="primary">
+              New customer
+            </ButtonLink>
+          ) : undefined
+        }
       />
 
       <Card>

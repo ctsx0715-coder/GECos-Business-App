@@ -2,7 +2,14 @@ import Link from "next/link";
 import { withSession } from "@/lib/auth/session";
 import { crmService } from "@/modules/crm/crm.service";
 import { crmSummary, pipelineByStage } from "@/lib/analytics/metrics";
-import { Badge, Card, EmptyState, PageHeader, StatTile } from "@/components/ui";
+import {
+  Badge,
+  ButtonLink,
+  Card,
+  EmptyState,
+  PageHeader,
+  StatTile,
+} from "@/components/ui";
 import {
   formatCents,
   formatCentsCompact,
@@ -25,7 +32,8 @@ const STAGES = [
 ] as const;
 
 export default async function PipelinePage() {
-  const { opportunities, summary, stages } = await withSession(async () => ({
+  const { opportunities, summary, stages, canCreate } = await withSession(async (session) => ({
+    canCreate: session.permissions.has("crm.opportunity.create"),
     opportunities: await crmService.listOpportunities([
       "QUALIFIED",
       "PROPOSAL",
@@ -42,6 +50,13 @@ export default async function PipelinePage() {
       <PageHeader
         title="Pipeline"
         description="Qualified deals being worked, weighted by probability"
+        action={
+          canCreate ? (
+            <ButtonLink href="/crm/opportunities/new" variant="primary">
+              New opportunity
+            </ButtonLink>
+          ) : undefined
+        }
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

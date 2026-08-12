@@ -2,7 +2,14 @@ import Link from "next/link";
 import { withSession } from "@/lib/auth/session";
 import { projectBudgets, projectPortfolio } from "@/lib/analytics/metrics";
 import { projectService } from "@/modules/projects/project.service";
-import { Badge, Card, EmptyState, PageHeader, StatTile } from "@/components/ui";
+import {
+  Badge,
+  ButtonLink,
+  Card,
+  EmptyState,
+  PageHeader,
+  StatTile,
+} from "@/components/ui";
 import { BudgetBar } from "@/components/ui/budget-bar";
 import { formatCentsCompact, formatDate } from "@/lib/format";
 
@@ -16,7 +23,8 @@ const STATUS_TONES: Record<string, "neutral" | "accent" | "success" | "warning">
   };
 
 export default async function ProjectsPage() {
-  const { budgets, portfolio, all } = await withSession(async () => ({
+  const { budgets, portfolio, all, canCreate } = await withSession(async (session) => ({
+    canCreate: session.permissions.has("projects.project.create"),
     budgets: await projectBudgets(),
     portfolio: await projectPortfolio(),
     all: await projectService.list(),
@@ -29,6 +37,13 @@ export default async function ProjectsPage() {
       <PageHeader
         title="Projects"
         description="Delivery, budget and what is running late"
+        action={
+          canCreate ? (
+            <ButtonLink href="/projects/new" variant="primary">
+              New project
+            </ButtonLink>
+          ) : undefined
+        }
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

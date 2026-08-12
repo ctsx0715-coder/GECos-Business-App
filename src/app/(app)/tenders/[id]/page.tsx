@@ -19,6 +19,7 @@ import {
   tenderStatusLabel,
 } from "@/lib/format";
 import { Checklist } from "./checklist";
+import { StartProject } from "./start-project";
 
 export default async function TenderDetailPage(props: {
   params: Promise<{ id: string }>;
@@ -38,13 +39,17 @@ export default async function TenderDetailPage(props: {
           decidedBy: { select: { firstName: true, lastName: true } },
         },
       });
+      const project = await db.project.findFirst({
+        where: { tenderId: id },
+        select: { id: true },
+      });
       const audit = await db.auditLog.findMany({
         where: { entityType: "Tender", entityId: id },
         orderBy: { createdAt: "desc" },
         take: 8,
         include: { actor: { select: { firstName: true, lastName: true } } },
       });
-      return { tender, approvals, audit, session };
+      return { tender, approvals, audit, session, project };
     } catch (error) {
       if (error instanceof NotFoundError) return null;
       throw error;
@@ -52,7 +57,7 @@ export default async function TenderDetailPage(props: {
   });
 
   if (!data) notFound();
-  const { tender, approvals, audit, session } = data;
+  const { tender, approvals, audit, session, project } = data;
 
   const closing = formatRelativeDays(tender.closingAt);
   const canEdit =
@@ -209,6 +214,22 @@ export default async function TenderDetailPage(props: {
               )}
             </dl>
           </Card>
+
+          {tender.status === "WON" &&
+            session.permissions.has("projects.project.create") && (
+              <Card>
+                <CardHeader
+                  title="Delivery"
+                  description="This bid was won — turn it into a project"
+                />
+                <div className="px-5 py-4">
+                  <StartProject
+                    tenderId={tender.id}
+                    existingProjectId={project?.id}
+                  />
+                </div>
+              </Card>
+            )}
 
           <Card>
             <CardHeader title="Documents" />

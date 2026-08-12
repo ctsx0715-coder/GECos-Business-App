@@ -2,7 +2,7 @@ import Link from "next/link";
 import { withSession } from "@/lib/auth/session";
 import { crmService } from "@/modules/crm/crm.service";
 import { leadFunnel } from "@/lib/analytics/metrics";
-import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
+import { Badge, ButtonLink, Card, EmptyState, PageHeader } from "@/components/ui";
 import { formatCents, formatDate } from "@/lib/format";
 import { LeadActions } from "./convert-form";
 import type { LeadStatus } from "@/generated/prisma/client";
@@ -64,6 +64,13 @@ export default async function LeadsPage(props: {
       <PageHeader
         title="Leads"
         description="Enquiries before they enter the pipeline"
+        action={
+          session.permissions.has("crm.lead.create") ? (
+            <ButtonLink href="/crm/leads/new" variant="primary">
+              New lead
+            </ButtonLink>
+          ) : undefined
+        }
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-4">

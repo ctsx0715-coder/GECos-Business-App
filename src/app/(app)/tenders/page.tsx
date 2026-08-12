@@ -3,6 +3,7 @@ import { withSession } from "@/lib/auth/session";
 import { tenderService } from "@/modules/tenders/tender.service";
 import {
   Badge,
+  ButtonLink,
   Card,
   EmptyState,
   PageHeader,
@@ -37,6 +38,10 @@ export default async function TendersPage(props: {
 }) {
   const { filter = "live", q } = await props.searchParams;
 
+  const canCreate = await withSession(async (session) =>
+    session.permissions.has("tenders.tender.create"),
+  );
+
   const { rows, total } = await withSession(() => {
     const base = { search: q };
     switch (filter) {
@@ -64,6 +69,13 @@ export default async function TendersPage(props: {
       <PageHeader
         title="Tender register"
         description={`${total} tender${total === 1 ? "" : "s"} matching this view`}
+        action={
+          canCreate ? (
+            <ButtonLink href="/tenders/new" variant="primary">
+              New tender
+            </ButtonLink>
+          ) : undefined
+        }
       />
 
       <div className="mb-4 flex flex-wrap gap-1">

@@ -17,6 +17,7 @@ import {
   formatDate,
   tenderStatusLabel,
 } from "@/lib/format";
+import { AddContactInline } from "@/components/forms/inline";
 
 /**
  * The single customer view.
@@ -30,11 +31,12 @@ export default async function CustomerDetailPage(props: {
 }) {
   const { id } = await props.params;
 
-  const data = await withSession(async () => {
+  const data = await withSession(async (session) => {
     try {
       return {
         customer: await crmService.getCustomer(id),
         activity: await crmService.activitiesFor("CUSTOMER", id),
+        canManageContacts: session.permissions.has("crm.contact.manage"),
       };
     } catch (error) {
       if (error instanceof NotFoundError) return null;
@@ -43,7 +45,7 @@ export default async function CustomerDetailPage(props: {
   });
 
   if (!data) notFound();
-  const { customer, activity } = data;
+  const { customer, activity, canManageContacts } = data;
 
   const openDeals = customer.opportunities.filter((o) =>
     ["QUALIFIED", "PROPOSAL", "NEGOTIATION"].includes(o.stage),
@@ -234,6 +236,7 @@ export default async function CustomerDetailPage(props: {
                 ))}
               </ul>
             )}
+            {canManageContacts && <AddContactInline customerId={customer.id} />}
           </Card>
         </div>
       </div>

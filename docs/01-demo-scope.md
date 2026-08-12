@@ -157,3 +157,29 @@ expense approval without touching the mechanism.
 
 That is the claim the walking skeleton was built to test, now with evidence
 from two modules: each one after the first is CRUD on proven rails.
+
+## The input layer
+
+A gap worth recording, because of how it happened. Each module was built as
+read-and-act — view the register, tick the checklist, approve the thing,
+progress the deal — and every slice was proven against seeded data. Seeded
+data never needs a form, so none got built. Thirteen creation paths existed as
+tested services; four had a button.
+
+The most telling omission was "start a project from a won tender", the
+handoff the whole platform is arranged around. Fully implemented, tested six
+ways, reachable only from the seed script.
+
+All thirteen now have a path: full pages for tenders, customers, leads,
+opportunities and projects; inline forms for contacts, team members,
+milestones, tasks and costs; and a "Start project" button on any won tender.
+
+Two things fell out of building it. Validation had to surface against the
+field that caused it, which meant the same Zod schema the service parses is
+now also what the form renders errors from — one definition, two uses. And a
+user without create permission was being redirected to a module list they
+often could not see either, producing a second error instead of a graceful
+exit; they now land on the dashboard.
+
+The seed also deliberately leaves one won tender unconverted, so the handoff
+has something to act on. Without it the feature is real but undemonstrable.

@@ -154,6 +154,9 @@ const NOPEDI_HISTORY: Array<TenderSpec & { won: boolean }> = [
   { title: "Bulk earthworks, Cornubia", customer: "eThekwini Municipality", industry: "Civil engineering", valueRands: 21_500_000, closingInDays: -80, status: "LOST", satisfiedMandatory: "all", won: false },
   { title: "Conveyor belt supply contract", customer: "Anglo American Platinum", industry: "Mechanical", valueRands: 5_600_000, closingInDays: -95, status: "LOST", satisfiedMandatory: "all", won: false },
   { title: "Pump station refurbishment", customer: "Transnet SOC Ltd", industry: "Mechanical", valueRands: 9_900_000, closingInDays: -110, status: "WON", satisfiedMandatory: "all", won: true },
+  // Deliberately left without a project, so the "start a project from a won
+  // tender" handoff has something to act on in a demo.
+  { title: "Depot electrical upgrade", customer: "eThekwini Municipality", industry: "Electrical", valueRands: 6_700_000, closingInDays: -28, status: "WON", satisfiedMandatory: "all", won: true },
   { title: "Access road rehabilitation", customer: "City of Tshwane", industry: "Civil engineering", valueRands: 6_150_000, closingInDays: -130, status: "NO_BID", satisfiedMandatory: 2, won: false },
 ];
 

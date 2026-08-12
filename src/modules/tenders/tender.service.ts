@@ -9,7 +9,6 @@ import {
   createTenderSchema,
   recordOutcomeSchema,
   updateTenderSchema,
-  type CreateTenderInput,
 } from "@/schemas/tender.schema";
 import { tenderRepository, type TenderListFilters } from "./tender.repository";
 
@@ -63,7 +62,10 @@ export const tenderService = {
     return tender;
   },
 
-  async create(input: CreateTenderInput) {
+  // `unknown` rather than a shaped type: the schema below is the contract, and
+  // a service that validates internally should not also require its caller to
+  // have already produced the right shape.
+  async create(input: unknown) {
     await requirePermission("tenders.tender.create");
     const data = createTenderSchema.parse(input);
     const { userId } = requireRequestContext();
