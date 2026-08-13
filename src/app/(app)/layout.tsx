@@ -33,6 +33,12 @@ interface NavItem {
   label: string;
   moduleKey: string;
   permission: PermissionKey;
+  /**
+   * Marks a link into the lifecycle preview rather than a working module.
+   * Styled apart on purpose — a demonstration screen that looks identical to a
+   * built one is how a client ends up believing they bought it.
+   */
+  isPreview?: boolean;
 }
 
 const NAV: NavItem[] = [
@@ -79,6 +85,12 @@ const NAV: NavItem[] = [
     permission: "projects.project.view",
   },
   {
+    href: "/reports",
+    label: "Reports",
+    moduleKey: "reports",
+    permission: "reports.dashboard.view",
+  },
+  {
     href: "/compliance",
     label: "Compliance",
     moduleKey: "core",
@@ -89,6 +101,13 @@ const NAV: NavItem[] = [
     label: "Audit trail",
     moduleKey: "core",
     permission: "core.audit.view",
+  },
+  {
+    href: "/preview",
+    label: "Lifecycle preview",
+    moduleKey: "tenders",
+    permission: "tenders.tender.view",
+    isPreview: true,
   },
 ];
 
@@ -158,7 +177,11 @@ export default async function AppLayout({
               <Link
                 key={item.href}
                 href={item.href}
-                className="rounded-lg px-3 py-1.5 text-sm text-muted transition hover:bg-surface-muted hover:text-foreground"
+                className={
+                  item.isPreview
+                    ? "ml-auto rounded-lg border border-dashed border-warning/40 px-3 py-1.5 text-sm text-warning transition hover:bg-warning-soft"
+                    : "rounded-lg px-3 py-1.5 text-sm text-muted transition hover:bg-surface-muted hover:text-foreground"
+                }
               >
                 {item.label}
               </Link>

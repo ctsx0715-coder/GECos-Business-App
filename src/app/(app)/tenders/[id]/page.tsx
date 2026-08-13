@@ -6,6 +6,7 @@ import { NotFoundError } from "@/lib/errors";
 import { tenderService } from "@/modules/tenders/tender.service";
 import {
   Badge,
+  ButtonLink,
   Card,
   CardHeader,
   Field,
@@ -80,9 +81,12 @@ export default async function TenderDetailPage(props: {
         title={tender.title}
         description={`${tender.reference}${tender.tenderNumber ? ` · client ref ${tender.tenderNumber}` : ""}`}
         action={
-          <Badge tone={statusTone(tender.status)}>
-            {tenderStatusLabel(tender.status)}
-          </Badge>
+          <div className="flex items-center gap-3">
+            <ButtonLink href={`/tenders/${tender.id}/report`}>Report</ButtonLink>
+            <Badge tone={statusTone(tender.status)}>
+              {tenderStatusLabel(tender.status)}
+            </Badge>
+          </div>
         }
       />
 

@@ -5,6 +5,7 @@ import { crmService } from "@/modules/crm/crm.service";
 import { NotFoundError } from "@/lib/errors";
 import {
   Badge,
+  ButtonLink,
   Card,
   CardHeader,
   EmptyState,
@@ -67,9 +68,14 @@ export default async function OpportunityDetailPage(props: {
         title={opportunity.title}
         description={`${opportunity.reference} · ${opportunity.customer.name}`}
         action={
-          <Badge tone={STAGE_TONES[opportunity.stage] ?? "neutral"}>
-            {opportunity.stage.toLowerCase()}
-          </Badge>
+          <div className="flex items-center gap-3">
+            <ButtonLink href={`/crm/opportunities/${opportunity.id}/report`}>
+              Report
+            </ButtonLink>
+            <Badge tone={STAGE_TONES[opportunity.stage] ?? "neutral"}>
+              {opportunity.stage.toLowerCase()}
+            </Badge>
+          </div>
         }
       />
 
