@@ -155,6 +155,15 @@ const NAV: NavItem[] = [
     parent: PEOPLE,
   },
   {
+    href: "/hr/work-patterns",
+    label: "Work patterns",
+    icon: "clock",
+    moduleKey: "hr",
+    permission: "hr.leave.configure",
+    group: "main",
+    parent: PEOPLE,
+  },
+  {
     href: "/hr/leave/holidays",
     label: "Public holidays",
     icon: "calendar",

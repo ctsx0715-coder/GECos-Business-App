@@ -9,6 +9,7 @@ import {
   certificationSchema,
   createEmployeeSchema,
   createLeaveTypeSchema,
+  createWorkPatternSchema,
   decideLeaveSchema,
   exitEmployeeSchema,
   generateHolidaysSchema,
@@ -18,6 +19,7 @@ import {
   setBalanceSchema,
   updateEmployeeSchema,
   updateLeaveTypeSchema,
+  updateWorkPatternSchema,
 } from "@/schemas/hr.schema";
 import type { EmployeeStatus, LeaveRequestStatus } from "@/generated/prisma/client";
 import { hrRepository } from "./hr.repository";
@@ -27,11 +29,13 @@ import {
   cycleFor,
   previousCycle,
 } from "./leave-accrual";
+import { isoDate, statutoryHolidays } from "./public-holidays";
 import {
-  isoDate,
-  statutoryHolidays,
+  DEFAULT_PATTERN,
+  PATTERN_ANCHOR,
   workingDaysBetween as countWorkingDays,
-} from "./public-holidays";
+  type WorkPatternShape,
+} from "./work-patterns";
 
 /**
  * HR business logic.
@@ -48,12 +52,12 @@ import {
 /**
  * Working days, re-exported.
  *
- * The counting itself moved to public-holidays.ts when holidays arrived, since
- * the two cannot be separated: a day off is a day off whether it is a Saturday
- * or Freedom Day. This export stays because callers and tests refer to it, and
- * because where a leave day count comes from is a fact about the HR service.
+ * The counting itself lives with work patterns: which days a person works is
+ * what defines a working day, and holidays are subtracted from that. This
+ * export stays because callers and tests refer to it, and because where a
+ * leave day count comes from is a fact about the HR service.
  */
-export { workingDaysBetween } from "./public-holidays";
+export { workingDaysBetween } from "./work-patterns";
 
 export interface LeaveBalanceView {
   leaveTypeId: string;
@@ -110,6 +114,7 @@ export const hrService = {
       department: data.department,
       managerId: data.managerId,
       userId: data.userId,
+      workPatternId: data.workPatternId,
       employmentType: data.employmentType,
       startedAt: data.startedAt,
     });
@@ -624,6 +629,100 @@ export const hrService = {
     });
   },
 
+  // -- Work patterns --------------------------------------------------------
+
+  async listWorkPatterns(includeInactive = false) {
+    return hrRepository.listWorkPatterns(includeInactive);
+  },
+
+  async getWorkPattern(id: string) {
+    const pattern = await hrRepository.findWorkPattern(id);
+    if (!pattern) throw new NotFoundError("Work pattern");
+    return pattern;
+  },
+
+  /**
+   * The pattern a person is on.
+   *
+   * Three fallbacks, in order: their own, the tenant's default, and Monday to
+   * Friday. The last is what the whole system assumed before patterns existed,
+   * so a tenant that never configures one is exactly where it was.
+   */
+  async patternForEmployee(employee: {
+    workPatternId: string | null;
+  }): Promise<WorkPatternShape> {
+    const own = employee.workPatternId
+      ? await hrRepository.findWorkPattern(employee.workPatternId)
+      : null;
+    const pattern = own ?? (await hrRepository.findDefaultWorkPattern());
+    if (!pattern) return DEFAULT_PATTERN;
+
+    return {
+      cycleDays: pattern.cycleDays,
+      workingDayIndexes: pattern.workingDayIndexes,
+      anchorOn: pattern.anchorOn,
+    };
+  },
+
+  async createWorkPattern(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const data = createWorkPatternSchema.parse(input);
+
+    const clash = await hrRepository.findWorkPatternByCode(data.code);
+    if (clash) {
+      throw new BusinessRuleError(
+        `${data.code} is already in use by ${clash.name}.`,
+      );
+    }
+
+    const created = await hrRepository.createWorkPattern({
+      code: data.code,
+      name: data.name,
+      description: data.description,
+      cycleDays: data.cycleDays,
+      workingDayIndexes: unique(data.workingDayIndexes),
+      anchorOn: PATTERN_ANCHOR,
+      hoursPerDay: data.hoursPerDay,
+      isDefault: data.isDefault,
+    });
+
+    if (data.isDefault) {
+      await hrRepository.clearDefaultWorkPattern(created.id);
+    }
+    return created;
+  },
+
+  async updateWorkPattern(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const { workPatternId, ...changes } = updateWorkPatternSchema.parse(input);
+
+    const pattern = await hrRepository.findWorkPattern(workPatternId);
+    if (!pattern) throw new NotFoundError("Work pattern");
+
+    /*
+     * The default cannot be retired or demoted on its own. Both would leave a
+     * tenant with no default, and everybody without a pattern of their own
+     * would silently fall back to Monday to Friday — which is precisely the
+     * wrong assumption this table exists to replace. Promoting another
+     * pattern is how a default changes.
+     */
+    if (pattern.isDefault && (!changes.isActive || !changes.isDefault)) {
+      throw new BusinessRuleError(
+        "This is the default pattern. Make another pattern the default first.",
+      );
+    }
+
+    const updated = await hrRepository.updateWorkPattern(workPatternId, {
+      ...changes,
+      workingDayIndexes: unique(changes.workingDayIndexes),
+    });
+
+    if (changes.isDefault) {
+      await hrRepository.clearDefaultWorkPattern(workPatternId);
+    }
+    return updated;
+  },
+
   // -- Public holidays ------------------------------------------------------
 
   /**
@@ -749,7 +848,11 @@ export const hrService = {
      * that range keeps the count honest when a shutdown is added later.
      */
     const holidays = await this.holidayDatesBetween(data.startsAt, data.endsAt);
-    const days = countWorkingDays(data.startsAt, data.endsAt, holidays);
+    // Their own pattern, not the office's: a boilermaker on a six-day week is
+    // charged for the Saturday he would have worked, and a fortnightly
+    // rotation is charged nothing for its week off.
+    const pattern = await this.patternForEmployee(employee);
+    const days = countWorkingDays(data.startsAt, data.endsAt, holidays, pattern);
     if (days === 0) {
       throw new BusinessRuleError(
         "That range contains no working days. Weekends and public holidays do not need to be booked.",
@@ -905,6 +1008,11 @@ export const hrService = {
     }
   },
 };
+
+/** Duplicate indexes would count a day twice. */
+function unique(indexes: number[]): number[] {
+  return [...new Set(indexes)].sort((a, b) => a - b);
+}
 
 function startOfToday(): Date {
   const now = new Date();

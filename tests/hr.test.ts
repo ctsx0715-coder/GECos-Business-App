@@ -940,3 +940,137 @@ describe("public holidays and leave", () => {
     expect(theirs).toHaveLength(0);
   });
 });
+
+describe("work patterns", () => {
+  const WEEK = monday(3);
+
+  async function sixDayWeek(isDefault = false) {
+    return as("hr_manager", () =>
+      hrService.createWorkPattern({
+        code: "SITE_6DAY",
+        name: "Site — six-day week",
+        cycleDays: 7,
+        workingDayIndexes: [0, 1, 2, 3, 4, 5],
+        isDefault,
+      }),
+    );
+  }
+
+  it("charges a six-day week for its Saturday", async () => {
+    const pattern = await sixDayWeek();
+    const employee = await anEmployee({
+      userId: org.userIds.employee,
+      workPatternId: pattern.id,
+    });
+    const type = await annualLeave(20);
+    await withBalance(employee.id, type.id, 20);
+
+    const request = await as("employee", () =>
+      hrService.requestLeave({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        startsAt: WEEK,
+        endsAt: plus(WEEK, 6),
+      }),
+    );
+
+    // Monday to Sunday: six working days rather than five.
+    expect(Number(request.days)).toBe(6);
+  });
+
+  it("leaves everybody else on Monday to Friday", async () => {
+    await sixDayWeek();
+    const employee = await anEmployee({ userId: org.userIds.employee });
+    const type = await annualLeave(20);
+    await withBalance(employee.id, type.id, 20);
+
+    const request = await as("employee", () =>
+      hrService.requestLeave({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        startsAt: WEEK,
+        endsAt: plus(WEEK, 6),
+      }),
+    );
+    expect(Number(request.days)).toBe(5);
+  });
+
+  it("uses the tenant's default for anyone without one of their own", async () => {
+    await sixDayWeek(true);
+    const employee = await anEmployee({ userId: org.userIds.employee });
+    const type = await annualLeave(20);
+    await withBalance(employee.id, type.id, 20);
+
+    const request = await as("employee", () =>
+      hrService.requestLeave({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        startsAt: WEEK,
+        endsAt: plus(WEEK, 6),
+      }),
+    );
+    expect(Number(request.days)).toBe(6);
+  });
+
+  it("keeps exactly one default", async () => {
+    const first = await sixDayWeek(true);
+    const second = await as("hr_manager", () =>
+      hrService.createWorkPattern({
+        code: "OFFICE",
+        name: "Office",
+        cycleDays: 7,
+        workingDayIndexes: [0, 1, 2, 3, 4],
+        isDefault: true,
+      }),
+    );
+
+    const patterns = await as("hr_manager", () => hrService.listWorkPatterns(true));
+    const defaults = patterns.filter((pattern) => pattern.isDefault);
+    expect(defaults).toHaveLength(1);
+    expect(defaults[0].id).toBe(second.id);
+    expect(defaults[0].id).not.toBe(first.id);
+  });
+
+  it("refuses to retire the default, so nobody is left without one", async () => {
+    const pattern = await sixDayWeek(true);
+
+    await expect(
+      as("hr_manager", () =>
+        hrService.updateWorkPattern({
+          workPatternId: pattern.id,
+          name: pattern.name,
+          cycleDays: 7,
+          workingDayIndexes: [0, 1, 2, 3, 4, 5],
+          isDefault: true,
+          isActive: false,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(BusinessRuleError);
+  });
+
+  it("refuses a working day outside the cycle", async () => {
+    await expect(
+      as("hr_manager", () =>
+        hrService.createWorkPattern({
+          code: "BROKEN",
+          name: "Impossible",
+          cycleDays: 7,
+          workingDayIndexes: [0, 9],
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("is not something an ordinary employee may configure", async () => {
+    await expect(
+      as("employee", () =>
+        hrService.createWorkPattern({
+          code: "MINE",
+          name: "Three-day week",
+          cycleDays: 7,
+          workingDayIndexes: [0, 1, 2],
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});

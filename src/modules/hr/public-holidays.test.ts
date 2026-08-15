@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  easterSunday,
-  isoDate,
-  statutoryHolidays,
-  workingDaysBetween,
-} from "./public-holidays";
+import { easterSunday, isoDate, statutoryHolidays } from "./public-holidays";
 
 /**
  * The holiday calendar, pinned to published dates.
@@ -96,51 +91,5 @@ describe("the statutory calendar", () => {
       );
       expect(new Set(days).size).toBe(days.length);
     }
-  });
-});
-
-describe("counting working days", () => {
-  it("excludes weekends", () => {
-    // Monday 1 June 2026 to Friday 5 June: five days.
-    expect(
-      workingDaysBetween(new Date("2026-06-01"), new Date("2026-06-05")),
-    ).toBe(5);
-
-    // Spanning a weekend adds calendar days but not working days.
-    expect(
-      workingDaysBetween(new Date("2026-06-01"), new Date("2026-06-08")),
-    ).toBe(6);
-  });
-
-  it("excludes a public holiday inside the range", () => {
-    // Youth Day, Tuesday 16 June 2026, sits in this week.
-    const holidays = new Set(["2026-06-16"]);
-    expect(
-      workingDaysBetween(new Date("2026-06-15"), new Date("2026-06-19"), holidays),
-    ).toBe(4);
-  });
-
-  it("ignores a holiday that falls on a weekend", () => {
-    // A holiday on the Saturday was never a working day to begin with.
-    const holidays = new Set(["2026-06-20"]);
-    expect(
-      workingDaysBetween(new Date("2026-06-15"), new Date("2026-06-19"), holidays),
-    ).toBe(5);
-  });
-
-  it("returns zero for a range that is entirely holiday and weekend", () => {
-    const holidays = new Set(["2026-06-16"]);
-    expect(
-      workingDaysBetween(new Date("2026-06-16"), new Date("2026-06-16"), holidays),
-    ).toBe(0);
-  });
-
-  it("counts a single day as one, and a weekend as none", () => {
-    expect(
-      workingDaysBetween(new Date("2026-06-03"), new Date("2026-06-03")),
-    ).toBe(1);
-    expect(
-      workingDaysBetween(new Date("2026-06-06"), new Date("2026-06-07")),
-    ).toBe(0);
   });
 });

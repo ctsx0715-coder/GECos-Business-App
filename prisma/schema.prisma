@@ -283,6 +283,7 @@ model Organisation {
 
   modules          OrganisationModule[]
   publicHolidays   PublicHoliday[]
+  workPatterns     WorkPattern[]
   users            User[]
   roles            Role[]
   customers        Customer[]
@@ -1260,6 +1261,8 @@ model Employee {
   managerId  String? @db.Uuid
 
   employmentType EmploymentType @default(PERMANENT)
+  /// Which days they work. Null means the tenant's default pattern.
+  workPatternId  String?        @db.Uuid
   status         EmployeeStatus @default(ACTIVE)
   startedAt      DateTime       @db.Timestamptz(6)
   /// Set on exit. The record is never deleted — statutory retention applies.
@@ -1277,6 +1280,7 @@ model Employee {
   user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
   manager      Employee?    @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
   reports      Employee[]   @relation("EmployeeManager")
+  workPattern  WorkPattern? @relation(fields: [workPatternId], references: [id], onDelete: SetNull)
 
   leaveBalances LeaveBalance[]
   leaveRequests LeaveRequest[]
@@ -1387,6 +1391,59 @@ model LeaveBalance {
   @@index([organisationId])
   @@index([organisationId, employeeId])
   @@map("leave_balances")
+}
+
+/// Which days somebody actually works.
+///
+/// Monday to Friday was hard-coded until this existed, and it is wrong for
+/// most of a construction payroll: site staff commonly work a six-day week,
+/// and a plant operator on a rotation works fourteen days on and seven off.
+/// Every one of them was being charged five days of leave for a week they
+/// would have worked six, or granted a Saturday they were rostered for.
+///
+/// Expressed as a repeating cycle rather than seven booleans so a fortnightly
+/// rotation is the same shape as an ordinary week: `cycleDays` long, with
+/// `workingDayIndexes` saying which positions in it are worked, counted from
+/// `anchorOn`. A seven-day cycle anchored on a Monday makes index 0 Monday,
+/// which is the ordinary case and reads as such.
+model WorkPattern {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  code           String
+  name           String
+  description    String?
+
+  /// 7 for a weekly pattern, 14 for a fortnightly rotation.
+  cycleDays Int @default(7)
+  /// Positions in the cycle that are worked, 0-indexed from anchorOn.
+  workingDayIndexes Int[]
+  /// The day index 0 falls on. Irrelevant for a weekly pattern anchored on a
+  /// Monday, and the whole story for a rotation.
+  anchorOn DateTime @db.Timestamptz(6)
+  /// Informational for leave, which is counted in days. Timesheets and
+  /// overtime will need it, and recording it now costs nothing.
+  hoursPerDay Decimal @default(8) @db.Decimal(4, 2)
+
+  /// The pattern used by anybody who has not been given one of their own.
+  /// Exactly one per tenant, enforced by the service rather than the schema,
+  /// because a partial unique index on a boolean is a poor trade for a rule
+  /// that has to be explained in an error message anyway.
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  employees    Employee[]
+
+  @@unique([organisationId, code])
+  @@index([organisationId])
+  @@map("work_patterns")
 }
 
 /// A day the company does not work, and therefore does not charge to leave.

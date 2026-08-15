@@ -28,6 +28,7 @@ export const hrRepository = {
       include: {
         manager: { select: EMPLOYEE_SUMMARY },
         user: { select: { id: true, email: true } },
+        workPattern: true,
       },
     });
   },
@@ -39,6 +40,7 @@ export const hrRepository = {
         manager: { select: EMPLOYEE_SUMMARY },
         reports: { select: EMPLOYEE_SUMMARY },
         user: { select: { id: true, email: true } },
+        workPattern: true,
         leaveBalances: {
           include: { leaveType: true },
           orderBy: { cycleStartsAt: "desc" },
@@ -238,6 +240,46 @@ export const hrRepository = {
   /** Soft delete, like everything else — the extension rewrites it (ADR-007). */
   deleteCertification(id: string) {
     return db.complianceItem.delete({ where: { id } });
+  },
+
+  listWorkPatterns(includeInactive = false) {
+    return db.workPattern.findMany({
+      where: includeInactive ? undefined : { isActive: true },
+      orderBy: [{ isDefault: "desc" }, { name: "asc" }],
+      include: { _count: { select: { employees: true } } },
+    });
+  },
+
+  findWorkPattern(id: string) {
+    return db.workPattern.findUnique({ where: { id } });
+  },
+
+  findWorkPatternByCode(code: string) {
+    return db.workPattern.findFirst({ where: { code } });
+  },
+
+  findDefaultWorkPattern() {
+    return db.workPattern.findFirst({ where: { isDefault: true, isActive: true } });
+  },
+
+  createWorkPattern(
+    data: Omit<Prisma.WorkPatternUncheckedCreateInput, "organisationId">,
+  ) {
+    return db.workPattern.create({
+      data: { ...data, organisationId: tenant() },
+    });
+  },
+
+  updateWorkPattern(id: string, data: Prisma.WorkPatternUncheckedUpdateInput) {
+    return db.workPattern.update({ where: { id }, data });
+  },
+
+  /** Stand every other pattern down, so exactly one default survives. */
+  clearDefaultWorkPattern(exceptId: string) {
+    return db.workPattern.updateMany({
+      where: { isDefault: true, id: { not: exceptId } },
+      data: { isDefault: false },
+    });
   },
 
   listHolidays(from: Date, to: Date) {

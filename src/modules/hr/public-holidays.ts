@@ -121,37 +121,3 @@ export function statutoryHolidays(year: number): HolidaySpec[] {
 export function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
-
-/**
- * Working days between two dates, inclusive, excluding weekends and holidays.
- *
- * The holidays are passed in rather than fetched, so this stays a function of
- * its arguments: the same range and the same holiday list always produce the
- * same number, whoever is asking and whenever they ask.
- */
-export function workingDaysBetween(
-  startsAt: Date,
-  endsAt: Date,
-  holidays: ReadonlySet<string> = new Set(),
-): number {
-  const start = utc(
-    startsAt.getUTCFullYear(),
-    startsAt.getUTCMonth() + 1,
-    startsAt.getUTCDate(),
-  );
-  const end = utc(
-    endsAt.getUTCFullYear(),
-    endsAt.getUTCMonth() + 1,
-    endsAt.getUTCDate(),
-  );
-  if (end < start) return 0;
-
-  let days = 0;
-  for (const day = start; day <= end; day.setUTCDate(day.getUTCDate() + 1)) {
-    const weekday = day.getUTCDay();
-    if (weekday === 0 || weekday === 6) continue;
-    if (holidays.has(isoDate(day))) continue;
-    days += 1;
-  }
-  return days;
-}

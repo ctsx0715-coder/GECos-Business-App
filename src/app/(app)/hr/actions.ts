@@ -243,3 +243,33 @@ export async function removeHolidayAction(
   revalidatePath("/hr/leave/holidays");
   return result;
 }
+
+export async function createWorkPatternAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.createWorkPattern(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath("/hr/work-patterns");
+  return result;
+}
+
+/**
+ * Editing a pattern.
+ *
+ * Revalidates the leave form as well: what a week costs is computed from the
+ * pattern, so a form rendered before the change would preview a number the
+ * service no longer agrees with.
+ */
+export async function updateWorkPatternAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.updateWorkPattern(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath("/hr/work-patterns");
+  revalidatePath("/hr/leave/new");
+  return result;
+}

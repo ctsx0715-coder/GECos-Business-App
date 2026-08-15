@@ -58,16 +58,19 @@ export interface EditableEmployee {
   employmentType: string;
   status: string;
   startedAt: string;
+  workPatternId: string;
 }
 
 export function EditEmployeeForm({
   employee,
   managers,
   users,
+  workPatterns,
 }: {
   employee: EditableEmployee;
   managers: Choice[];
   users: Choice[];
+  workPatterns: Choice[];
 }) {
   const router = useRouter();
   const { pending, message, fieldErrors, submit } = useFormAction();
@@ -84,6 +87,7 @@ export function EditEmployeeForm({
   const [employmentType, setEmploymentType] = useState(employee.employmentType);
   const [status, setStatus] = useState(employee.status);
   const [startedAt, setStartedAt] = useState(employee.startedAt);
+  const [workPatternId, setWorkPatternId] = useState(employee.workPatternId);
 
   const exited = employee.status === "EXITED";
 
@@ -182,6 +186,16 @@ export function EditEmployeeForm({
           />
         )}
         <SelectField
+          label="Works"
+          name="workPatternId"
+          value={workPatternId}
+          onChange={setWorkPatternId}
+          options={workPatterns}
+          placeholder="The default pattern"
+          errors={fieldErrors}
+          hint="Decides what a week of leave costs this person."
+        />
+        <SelectField
           label="Reports to"
           name="managerId"
           value={managerId}
@@ -225,6 +239,10 @@ export function EditEmployeeForm({
               managerId: managerId || undefined,
               userId: userId || undefined,
               employmentType,
+              // Null puts them back on the default; undefined would leave the
+              // pattern they are on untouched, which is not what an emptied
+              // select means.
+              workPatternId: workPatternId || null,
               status: exited ? undefined : status,
               startedAt: startedAt || undefined,
             }),
