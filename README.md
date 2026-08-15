@@ -30,7 +30,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 234 tests against a real database
+pnpm test                   # 269 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -49,13 +49,21 @@ in `src/generated/prisma` and is not committed.
 | `pnpm db:sync` | Reconcile permissions, roles and module flags into an existing database |
 | `pnpm db:seed` | Build a demo dataset from nothing — **truncates every table first** |
 | `pnpm db:studio` | Browse the database |
-
-`db:sync` runs automatically on every deploy and is safe to repeat: it only
-adds, leaves a disabled module disabled, and never creates users. It is what
-makes a new module visible on a database that already exists — without it, the
-permission rows and module flag a new module needs are only ever written when a
-tenant is first created, and the module is invisible to everyone.
 | `pnpm screenshots:lifecycle` | Drives the lifecycle preview and reporting screens, asserting on each |
+
+`db:sync` runs automatically on every **production** deploy and is safe to
+repeat: it only adds, leaves a disabled module disabled, and never creates
+users. It is what makes a new module visible on a database that already exists
+— without it, the permission rows and role links a new module needs are only
+ever written when a tenant is first created, and the module is invisible to
+everyone, including a user holding every permission.
+
+Preview deployments skip both migrations and the sync. They share the
+production database, so writing to it from a preview would change the schema
+production is serving from — and when the same commit sits on two branches,
+both builds race for Prisma's advisory lock and one fails. Schema belongs to
+the production deploy. If previews ever get a database of their own, set
+`NOPEDI_MIGRATE_ON_PREVIEW=true` in the preview environment.
 
 ## Architecture in one page
 

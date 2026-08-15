@@ -7,6 +7,7 @@ import {
   SYSTEM_ROLES,
 } from "@/lib/permissions";
 import type { PermissionKey } from "@/lib/permissions";
+import { shouldTouchDatabase, skipMessage } from "./should-touch-database.mjs";
 
 /**
  * Reconciles code-owned configuration into an existing database.
@@ -44,8 +45,11 @@ const IMPLEMENTED = new Set<string>([
 ]);
 
 async function main() {
-  if (!process.env.DATABASE_URL) {
-    console.warn("  DATABASE_URL is not set — skipping configuration sync.");
+  // Same rule as the migration step, from the same place, so the two cannot
+  // drift into a preview build writing to the production database.
+  const { ok, reason } = shouldTouchDatabase();
+  if (!ok) {
+    console.warn(skipMessage(reason));
     return;
   }
 

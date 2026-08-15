@@ -1,33 +1,27 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { shouldTouchDatabase, skipMessage } from "./should-touch-database.mjs";
 
 /**
- * Applies pending migrations before a deploy, but only when a database is
- * actually configured.
+ * Applies pending migrations before a deploy, when this build is the one that
+ * owns the database.
  *
- * Running `prisma migrate deploy` unconditionally makes the build fail with
- * "The datasource.url property is required" on any deploy where DATABASE_URL
- * has not been set yet — which is a confusing way to learn that you forgot an
- * environment variable. The application build itself has no need of a
- * database, so a missing URL is a warning here, not a failure.
+ * Two reasons to skip, both of which are a warning rather than a failure. No
+ * DATABASE_URL means the environment variable has not been added yet, and the
+ * application build itself has no need of a database — failing here is a
+ * confusing way to learn about a missing variable. A preview deployment means
+ * the database belongs to production, and migrating it from here races the
+ * production deploy for Prisma's advisory lock.
  *
- * A URL that is set but broken is a different matter and still fails the
- * build, loudly, because that is a real misconfiguration.
+ * A URL that is set but broken, on a build that should be migrating, is a
+ * different matter and still fails the build, loudly, because that is a real
+ * misconfiguration.
  */
 
-if (!process.env.DATABASE_URL) {
-  console.warn(
-    [
-      "",
-      "  DATABASE_URL is not set — skipping migrations.",
-      "",
-      "  The build will succeed, but the deployed app cannot serve requests",
-      "  until you add DATABASE_URL to the Vercel project's environment",
-      "  variables and redeploy. Use the Neon *pooled* connection string, and",
-      "  set the function region to match the database region.",
-      "",
-    ].join("\n"),
-  );
+const { ok, reason } = shouldTouchDatabase();
+
+if (!ok) {
+  console.warn(skipMessage(reason));
   process.exit(0);
 }
 
