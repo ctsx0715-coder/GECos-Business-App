@@ -21,7 +21,9 @@
     "screenshots:projects": "tsx scripts/screenshots-projects.ts",
     "screenshots:create": "tsx scripts/screenshots-create.ts",
     "screenshots:lifecycle": "tsx scripts/screenshots-lifecycle.ts",
-    "db:sync": "tsx scripts/sync-config.ts"
+    "db:sync": "tsx scripts/sync-config.ts",
+    "hr:backfill": "tsx scripts/backfill-hr.ts",
+    "hr:accrue": "tsx scripts/run-accrual.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

@@ -29,15 +29,38 @@ export interface NavGroup {
   items: NavNode[];
 }
 
-function isActive(pathname: string, href: string): boolean {
+function matches(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/**
+ * The one item a path belongs to.
+ *
+ * Nesting means two items can both match: /hr/leave/types matches "Leave" as
+ * well as "Leave policy", and lighting up both leaves the reader working out
+ * which page they are actually on. The longest matching href is the most
+ * specific one, and that is the answer.
+ */
+function useActiveHref(hrefs: string[]): string | null {
+  const pathname = usePathname();
+  return hrefs
+    .filter((href) => matches(pathname, href))
+    .sort((a, b) => b.length - a.length)[0] ?? null;
+}
+
+function collectHrefs(groups: NavGroup[]): string[] {
+  return groups.flatMap((group) =>
+    group.items.flatMap((item) =>
+      item.children ? item.children.map((child) => child.href) : [item.href],
+    ),
+  );
 }
 
 const LEAF =
   "flex min-h-[38px] items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-2 text-sm font-medium transition-colors";
 
 export function SidebarNav({ groups }: { groups: NavGroup[] }) {
-  const pathname = usePathname();
+  const activeHref = useActiveHref(collectHrefs(groups));
 
   return (
     <nav className="flex flex-1 flex-col gap-4" aria-label="Main">
@@ -49,14 +72,14 @@ export function SidebarNav({ groups }: { groups: NavGroup[] }) {
 
           {group.items.map((item) =>
             item.children ? (
-              <NavBranch key={item.label} item={item} pathname={pathname} />
+              <NavBranch key={item.label} item={item} activeHref={activeHref} />
             ) : (
               <Link
                 key={item.href}
                 href={item.href}
-                aria-current={isActive(pathname, item.href) ? "page" : undefined}
+                aria-current={item.href === activeHref ? "page" : undefined}
                 className={`${LEAF} ${
-                  isActive(pathname, item.href)
+                  item.href === activeHref
                     ? "border-border bg-surface-muted text-foreground"
                     : "text-muted hover:bg-surface-muted hover:text-foreground"
                 }`}
@@ -79,9 +102,15 @@ export function SidebarNav({ groups }: { groups: NavGroup[] }) {
  * costs nothing to run. It opens by default when one of its children is the
  * page you are on.
  */
-function NavBranch({ item, pathname }: { item: NavNode; pathname: string }) {
+function NavBranch({
+  item,
+  activeHref,
+}: {
+  item: NavNode;
+  activeHref: string | null;
+}) {
   const children = item.children ?? [];
-  const hasActiveChild = children.some((child) => isActive(pathname, child.href));
+  const hasActiveChild = children.some((child) => child.href === activeHref);
 
   return (
     <details open={hasActiveChild || undefined} className="group">
@@ -106,9 +135,9 @@ function NavBranch({ item, pathname }: { item: NavNode; pathname: string }) {
           <Link
             key={child.href}
             href={child.href}
-            aria-current={isActive(pathname, child.href) ? "page" : undefined}
+            aria-current={child.href === activeHref ? "page" : undefined}
             className={`relative flex min-h-[34px] items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm font-medium transition-colors before:absolute before:-left-3.5 before:top-1/2 before:h-px before:w-2.5 before:bg-border ${
-              isActive(pathname, child.href)
+              child.href === activeHref
                 ? "bg-surface-muted text-foreground"
                 : "text-muted hover:bg-surface-muted hover:text-foreground"
             }`}
@@ -129,8 +158,6 @@ export function Breadcrumb({
   organisation: string;
   groups: NavGroup[];
 }) {
-  const pathname = usePathname();
-
   const flat: Array<{ href: string; label: string; parent?: string }> = [];
   for (const group of groups) {
     for (const item of group.items) {
@@ -144,7 +171,8 @@ export function Breadcrumb({
     }
   }
 
-  const here = flat.find((item) => isActive(pathname, item.href));
+  const activeHref = useActiveHref(flat.map((item) => item.href));
+  const here = flat.find((item) => item.href === activeHref);
 
   return (
     <nav

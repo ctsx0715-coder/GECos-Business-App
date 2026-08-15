@@ -37,7 +37,9 @@ export type IconName =
   | "plus"
   | "search"
   | "shield"
+  | "pencil"
   | "target"
+  | "trash"
   | "trend"
   | "userPlus"
   | "users";
@@ -179,11 +181,24 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="m9 12 2 2 4-4" />
     </>
   ),
+  pencil: (
+    <>
+      <path d="M4 20h4l10-10a2.83 2.83 0 0 0-4-4L4 16z" />
+      <path d="m13.5 6.5 4 4" />
+    </>
+  ),
   target: (
     <>
       <circle cx="12" cy="12" r="9" />
       <circle cx="12" cy="12" r="5" />
       <circle cx="12" cy="12" r="1.2" />
+    </>
+  ),
+  trash: (
+    <>
+      <path d="M4 7h16" />
+      <path d="M9 7V5h6v2" />
+      <path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7" />
     </>
   ),
   trend: (

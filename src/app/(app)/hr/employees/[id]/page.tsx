@@ -2,10 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { withSession } from "@/lib/auth/session";
 import { hrService } from "@/modules/hr/hr.service";
-import { certificationsFor } from "@/lib/analytics/hr-metrics";
 import { NotFoundError } from "@/lib/errors";
 import {
   Badge,
+  ButtonLink,
   Card,
   CardHeader,
   EmptyState,
@@ -13,7 +13,12 @@ import {
   Icon,
   PageHeader,
 } from "@/components/ui";
-import { formatDate, formatRelativeDays } from "@/lib/format";
+import { formatDate } from "@/lib/format";
+import {
+  AddCertificationInline,
+  AdjustBalanceInline,
+  RemoveCertification,
+} from "./manage";
 
 /** One person: their record, their tickets, their leave. */
 
@@ -39,6 +44,23 @@ const LEAVE_ICONS: Record<string, "clock" | "check" | "ban"> = {
   CANCELLED: "ban",
 };
 
+/**
+ * Where a certification sits against its expiry date.
+ *
+ * A qualification with no expiry is not overdue, it is permanent — treating a
+ * null date as "expired in 1970" is how a trade test ends up on a chase list
+ * forever. The same 90-day warning window as the compliance screen, because it
+ * is the same expiry engine underneath (ADR-004).
+ */
+function expiryState(expiresAt: Date | null): {
+  expired: boolean;
+  soon: boolean;
+} {
+  if (!expiresAt) return { expired: false, soon: false };
+  const days = Math.ceil((expiresAt.getTime() - Date.now()) / 86_400_000);
+  return { expired: days < 0, soon: days >= 0 && days <= 90 };
+}
+
 export default async function EmployeePage({
   params,
 }: {
@@ -46,12 +68,21 @@ export default async function EmployeePage({
 }) {
   const { id } = await params;
 
-  const data = await withSession(async () => {
+  const data = await withSession(async (session) => {
     try {
       return {
         employee: await hrService.getEmployee(id),
         balances: await hrService.balancesFor(id),
-        certifications: await certificationsFor(id),
+        certifications: await hrService.certificationsFor(id),
+        /** Capped types only: an uncapped one has no balance to adjust. */
+        leaveTypes: (await hrService.listLeaveTypes())
+          .filter((type) => type.daysPerCycle !== null)
+          .map((type) => ({ value: type.id, label: type.name })),
+        mayEdit: session.permissions.has("hr.employee.edit"),
+        mayManageCertifications: session.permissions.has(
+          "hr.certification.manage",
+        ),
+        mayConfigureLeave: session.permissions.has("hr.leave.configure"),
       };
     } catch (error) {
       if (error instanceof NotFoundError) return null;
@@ -70,12 +101,19 @@ export default async function EmployeePage({
           .filter(Boolean)
           .join(" · ")}
         action={
-          <Badge
-            tone={employee.status === "EXITED" ? "neutral" : "accent"}
-            icon={employee.status === "EXITED" ? "logOut" : "check"}
-          >
-            {employee.status.replace("_", " ").toLowerCase()}
-          </Badge>
+          <span className="flex items-center gap-2">
+            <Badge
+              tone={employee.status === "EXITED" ? "neutral" : "accent"}
+              icon={employee.status === "EXITED" ? "logOut" : "check"}
+            >
+              {employee.status.replace("_", " ").toLowerCase()}
+            </Badge>
+            {data.mayEdit && (
+              <ButtonLink href={`/hr/employees/${employee.id}/edit`} icon="pencil">
+                Edit
+              </ButtonLink>
+            )}
+          </span>
         }
       />
 
@@ -164,6 +202,12 @@ export default async function EmployeePage({
               ))}
             </ul>
           )}
+          {data.mayConfigureLeave && employee.status !== "EXITED" && (
+            <AdjustBalanceInline
+              employeeId={employee.id}
+              leaveTypes={data.leaveTypes}
+            />
+          )}
         </Card>
       </div>
 
@@ -182,9 +226,7 @@ export default async function EmployeePage({
         ) : (
           <ul className="divide-y divide-border">
             {certifications.map((cert) => {
-              const relative = formatRelativeDays(cert.expiresAt);
-              const expired = relative.days < 0;
-              const soon = !expired && relative.days <= 90;
+              const { expired, soon } = expiryState(cert.expiresAt);
               return (
                 <li key={cert.id} className="flex items-center gap-3 px-5 py-3">
                   <Icon
@@ -203,6 +245,8 @@ export default async function EmployeePage({
                     </span>
                     <span className="block text-xs text-faint">
                       {cert.category.toLowerCase()}
+                      {cert.certificateNumber && ` · ${cert.certificateNumber}`}
+                      {cert.providerName && ` · ${cert.providerName}`}
                     </span>
                   </span>
                   <span
@@ -214,12 +258,24 @@ export default async function EmployeePage({
                           : "text-muted"
                     }`}
                   >
-                    {expired ? "expired" : "expires"} {formatDate(cert.expiresAt)}
+                    {cert.expiresAt
+                      ? `${expired ? "expired" : "expires"} ${formatDate(cert.expiresAt)}`
+                      : "does not expire"}
                   </span>
+                  {data.mayManageCertifications && (
+                    <RemoveCertification
+                      certificationId={cert.id}
+                      employeeId={employee.id}
+                      name={cert.requirementName}
+                    />
+                  )}
                 </li>
               );
             })}
           </ul>
+        )}
+        {data.mayManageCertifications && (
+          <AddCertificationInline employeeId={employee.id} />
         )}
       </Card>
 
