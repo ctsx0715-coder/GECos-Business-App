@@ -107,6 +107,42 @@ Not yet handled: the BCEA's rule that carried days expire six months into the
 new cycle. That needs a date the ledger does not record, so it is left undone
 rather than half-done.
 
+### Work patterns
+
+Which days somebody works decides what a week of leave costs them. Monday to
+Friday was assumed everywhere until patterns existed, and on a construction
+payroll that is wrong more often than it is right: sites commonly work six
+days, and plant operators work rotations.
+
+A pattern is a repeating cycle — `cycleDays` long, with the positions in it
+that are worked — so a fortnightly rotation is the same shape as an ordinary
+week rather than a special case. Each person can have one; anyone without falls
+back to the tenant's default, and a tenant with no default falls back to Monday
+to Friday, which is exactly where the system was before. They live on
+**People → Work patterns**.
+
+Not yet handled: entitlement is not scaled by pattern. The BCEA's 21 consecutive
+days is 15 working days on a five-day week and 18 on a six-day week, and which
+applies to Nopedi is the same open policy question as the rest of the leave
+rules — so entitlement stays rows somebody writes.
+
+### Roster
+
+Who is on which site, a week at a time, at **People → Roster**. Placements are
+date ranges rather than a row per day, because a fortnight on one site is one
+decision — the days inside it come from the person's work pattern, so a
+six-day week shows its Saturday and a rotation shows nothing in its off week.
+
+Every cell is one of four things and they are meant to be told apart without
+reading: placed, on leave, due in but unplaced, and not a working day at all.
+That last one is the reason the roster knows about patterns and holidays: a day
+somebody was never going to work must not look like a day nobody has got round
+to filling.
+
+Two clashes are refused — being in two places at once, and being placed across
+approved leave. Leave that is only requested is shown rather than refused,
+because the roster is often what decides whether that request gets approved.
+
 ### Public holidays
 
 Leave is never charged for a day the company is closed. The twelve statutory

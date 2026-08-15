@@ -5,19 +5,23 @@ import { requirePermission, hasPermission } from "@/lib/permissions";
 import {
   addHolidaySchema,
   adjustBalanceSchema,
+  assignToRosterSchema,
   cancelLeaveSchema,
   certificationSchema,
   createEmployeeSchema,
   createLeaveTypeSchema,
+  createWorkPatternSchema,
   decideLeaveSchema,
   exitEmployeeSchema,
   generateHolidaysSchema,
+  removeAssignmentSchema,
   removeCertificationSchema,
   removeHolidaySchema,
   requestLeaveSchema,
   setBalanceSchema,
   updateEmployeeSchema,
   updateLeaveTypeSchema,
+  updateWorkPatternSchema,
 } from "@/schemas/hr.schema";
 import type { EmployeeStatus, LeaveRequestStatus } from "@/generated/prisma/client";
 import { hrRepository } from "./hr.repository";
@@ -27,11 +31,14 @@ import {
   cycleFor,
   previousCycle,
 } from "./leave-accrual";
+import { isoDate, statutoryHolidays } from "./public-holidays";
 import {
-  isoDate,
-  statutoryHolidays,
+  DEFAULT_PATTERN,
+  PATTERN_ANCHOR,
   workingDaysBetween as countWorkingDays,
-} from "./public-holidays";
+  workingDaysIn,
+  type WorkPatternShape,
+} from "./work-patterns";
 
 /**
  * HR business logic.
@@ -48,12 +55,12 @@ import {
 /**
  * Working days, re-exported.
  *
- * The counting itself moved to public-holidays.ts when holidays arrived, since
- * the two cannot be separated: a day off is a day off whether it is a Saturday
- * or Freedom Day. This export stays because callers and tests refer to it, and
- * because where a leave day count comes from is a fact about the HR service.
+ * The counting itself lives with work patterns: which days a person works is
+ * what defines a working day, and holidays are subtracted from that. This
+ * export stays because callers and tests refer to it, and because where a
+ * leave day count comes from is a fact about the HR service.
  */
-export { workingDaysBetween } from "./public-holidays";
+export { workingDaysBetween } from "./work-patterns";
 
 export interface LeaveBalanceView {
   leaveTypeId: string;
@@ -110,6 +117,7 @@ export const hrService = {
       department: data.department,
       managerId: data.managerId,
       userId: data.userId,
+      workPatternId: data.workPatternId,
       employmentType: data.employmentType,
       startedAt: data.startedAt,
     });
@@ -624,6 +632,236 @@ export const hrService = {
     });
   },
 
+  // -- Work patterns --------------------------------------------------------
+
+  async listWorkPatterns(includeInactive = false) {
+    return hrRepository.listWorkPatterns(includeInactive);
+  },
+
+  async getWorkPattern(id: string) {
+    const pattern = await hrRepository.findWorkPattern(id);
+    if (!pattern) throw new NotFoundError("Work pattern");
+    return pattern;
+  },
+
+  /**
+   * The pattern a person is on.
+   *
+   * Three fallbacks, in order: their own, the tenant's default, and Monday to
+   * Friday. The last is what the whole system assumed before patterns existed,
+   * so a tenant that never configures one is exactly where it was.
+   */
+  async patternForEmployee(employee: {
+    workPatternId: string | null;
+  }): Promise<WorkPatternShape> {
+    const own = employee.workPatternId
+      ? await hrRepository.findWorkPattern(employee.workPatternId)
+      : null;
+    const pattern = own ?? (await hrRepository.findDefaultWorkPattern());
+    if (!pattern) return DEFAULT_PATTERN;
+
+    return {
+      cycleDays: pattern.cycleDays,
+      workingDayIndexes: pattern.workingDayIndexes,
+      anchorOn: pattern.anchorOn,
+    };
+  },
+
+  async createWorkPattern(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const data = createWorkPatternSchema.parse(input);
+
+    const clash = await hrRepository.findWorkPatternByCode(data.code);
+    if (clash) {
+      throw new BusinessRuleError(
+        `${data.code} is already in use by ${clash.name}.`,
+      );
+    }
+
+    const created = await hrRepository.createWorkPattern({
+      code: data.code,
+      name: data.name,
+      description: data.description,
+      cycleDays: data.cycleDays,
+      workingDayIndexes: unique(data.workingDayIndexes),
+      anchorOn: PATTERN_ANCHOR,
+      hoursPerDay: data.hoursPerDay,
+      isDefault: data.isDefault,
+    });
+
+    if (data.isDefault) {
+      await hrRepository.clearDefaultWorkPattern(created.id);
+    }
+    return created;
+  },
+
+  async updateWorkPattern(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const { workPatternId, ...changes } = updateWorkPatternSchema.parse(input);
+
+    const pattern = await hrRepository.findWorkPattern(workPatternId);
+    if (!pattern) throw new NotFoundError("Work pattern");
+
+    /*
+     * The default cannot be retired or demoted on its own. Both would leave a
+     * tenant with no default, and everybody without a pattern of their own
+     * would silently fall back to Monday to Friday — which is precisely the
+     * wrong assumption this table exists to replace. Promoting another
+     * pattern is how a default changes.
+     */
+    if (pattern.isDefault && (!changes.isActive || !changes.isDefault)) {
+      throw new BusinessRuleError(
+        "This is the default pattern. Make another pattern the default first.",
+      );
+    }
+
+    const updated = await hrRepository.updateWorkPattern(workPatternId, {
+      ...changes,
+      workingDayIndexes: unique(changes.workingDayIndexes),
+    });
+
+    if (changes.isDefault) {
+      await hrRepository.clearDefaultWorkPattern(workPatternId);
+    }
+    return updated;
+  },
+
+  // -- Roster ---------------------------------------------------------------
+
+  /** The sites a person can be placed on. */
+  async rosterProjects() {
+    await requirePermission("hr.roster.view");
+    return hrRepository.listProjectsForRoster();
+  },
+
+  /**
+   * Who is where, over a window.
+   *
+   * Returns the assignments alongside the days each person is actually due in
+   * — their pattern, less public holidays — and the leave they have booked.
+   * A roster that shows somebody placed on a site during their approved leave
+   * is worse than no roster, because somebody will plan around it.
+   */
+  async rosterFor(from: Date, to: Date, filter?: { projectId?: string }) {
+    await requirePermission("hr.roster.view");
+
+    const [assignments, holidays] = await Promise.all([
+      hrRepository.listAssignments(from, to, filter),
+      this.holidayDatesBetween(from, to),
+    ]);
+
+    const employees = await hrRepository.listEmployees([
+      "ACTIVE",
+      "ON_LEAVE",
+      "SUSPENDED",
+    ]);
+
+    const leave = await hrRepository.listLeaveRequests({
+      status: ["SUBMITTED", "APPROVED"],
+    });
+    const inWindow = leave.filter(
+      (request) => request.startsAt <= to && request.endsAt >= from,
+    );
+
+    const people = await Promise.all(
+      employees.map(async (employee) => {
+        const pattern = await this.patternForEmployee(employee);
+        return {
+          id: employee.id,
+          name: `${employee.firstName} ${employee.lastName}`,
+          jobTitle: employee.jobTitle,
+          /** Days they are due in: their pattern, less the days off. */
+          workingDays: workingDaysIn(from, to, holidays, pattern),
+          assignments: assignments
+            .filter((assignment) => assignment.employeeId === employee.id)
+            .map((assignment) => ({
+              id: assignment.id,
+              projectId: assignment.projectId,
+              projectName: assignment.project?.name ?? null,
+              startsAt: assignment.startsAt,
+              endsAt: assignment.endsAt,
+              note: assignment.note,
+            })),
+          leave: inWindow
+            .filter((request) => request.employeeId === employee.id)
+            .map((request) => ({
+              id: request.id,
+              status: request.status,
+              leaveTypeName: request.leaveType.name,
+              startsAt: request.startsAt,
+              endsAt: request.endsAt,
+            })),
+        };
+      }),
+    );
+
+    return { people, holidays: [...holidays] };
+  },
+
+  /**
+   * Placing somebody.
+   *
+   * Two clashes are refused outright, because both mean the plan is wrong
+   * rather than merely tight: being in two places at once, and being placed
+   * across leave that has already been approved. Leave still only requested is
+   * a warning rather than a refusal — the roster is often what decides whether
+   * that request gets approved.
+   */
+  async assignToRoster(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const data = assignToRosterSchema.parse(input);
+
+    const employee = await hrRepository.findEmployee(data.employeeId);
+    if (!employee) throw new NotFoundError("Employee");
+    if (employee.status === "EXITED") {
+      throw new BusinessRuleError(
+        "That employee has left, so they cannot be placed on a site.",
+      );
+    }
+
+    const clashes = await hrRepository.overlappingAssignments(
+      data.employeeId,
+      data.startsAt,
+      data.endsAt,
+    );
+    if (clashes.length > 0) {
+      const where = clashes[0].project?.name ?? "an unassigned placement";
+      throw new BusinessRuleError(
+        `${employee.firstName} is already placed on ${where} over those dates.`,
+      );
+    }
+
+    const approvedLeave = employee.leaveRequests.filter(
+      (request) =>
+        request.status === "APPROVED" &&
+        request.startsAt <= data.endsAt &&
+        request.endsAt >= data.startsAt,
+    );
+    if (approvedLeave.length > 0) {
+      throw new BusinessRuleError(
+        `${employee.firstName} has approved leave over those dates.`,
+      );
+    }
+
+    return hrRepository.createAssignment({
+      employeeId: data.employeeId,
+      projectId: data.projectId ?? null,
+      startsAt: data.startsAt,
+      endsAt: data.endsAt,
+      note: data.note,
+    });
+  },
+
+  async removeAssignment(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const data = removeAssignmentSchema.parse(input);
+
+    const assignment = await hrRepository.findAssignment(data.assignmentId);
+    if (!assignment) throw new NotFoundError("Roster assignment");
+
+    return hrRepository.deleteAssignment(data.assignmentId);
+  },
+
   // -- Public holidays ------------------------------------------------------
 
   /**
@@ -749,7 +987,11 @@ export const hrService = {
      * that range keeps the count honest when a shutdown is added later.
      */
     const holidays = await this.holidayDatesBetween(data.startsAt, data.endsAt);
-    const days = countWorkingDays(data.startsAt, data.endsAt, holidays);
+    // Their own pattern, not the office's: a boilermaker on a six-day week is
+    // charged for the Saturday he would have worked, and a fortnightly
+    // rotation is charged nothing for its week off.
+    const pattern = await this.patternForEmployee(employee);
+    const days = countWorkingDays(data.startsAt, data.endsAt, holidays, pattern);
     if (days === 0) {
       throw new BusinessRuleError(
         "That range contains no working days. Weekends and public holidays do not need to be booked.",
@@ -905,6 +1147,11 @@ export const hrService = {
     }
   },
 };
+
+/** Duplicate indexes would count a day twice. */
+function unique(indexes: number[]): number[] {
+  return [...new Set(indexes)].sort((a, b) => a - b);
+}
 
 function startOfToday(): Date {
   const now = new Date();

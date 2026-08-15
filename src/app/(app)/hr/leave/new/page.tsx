@@ -13,6 +13,31 @@ export default async function NewLeavePage() {
     const myEmployeeId = await hrService.myEmployeeId();
     const mayBookForOthers = session.permissions.has("hr.leave.configure");
 
+    /*
+     * The pattern of everybody this form can book for, so the live preview
+     * charges a six-day week for its Saturday exactly as the service will.
+     * One row each for a handful of people — cheaper than the alternative,
+     * which is a preview that disagrees with the number that lands.
+     */
+    const bookable = mayBookForOthers
+      ? await hrService.listEmployees(["ACTIVE", "ON_LEAVE"])
+      : myEmployeeId
+        ? [await hrService.getEmployee(myEmployeeId)]
+        : [];
+
+    const patterns: Record<
+      string,
+      { cycleDays: number; workingDayIndexes: number[]; anchorOn: string }
+    > = {};
+    for (const person of bookable) {
+      const pattern = await hrService.patternForEmployee(person);
+      patterns[person.id] = {
+        cycleDays: pattern.cycleDays,
+        workingDayIndexes: pattern.workingDayIndexes,
+        anchorOn: pattern.anchorOn.toISOString(),
+      };
+    }
+
     return {
       myEmployeeId,
       leaveTypes: (await hrService.listLeaveTypes()).map((type) => ({
@@ -31,8 +56,9 @@ export default async function NewLeavePage() {
           new Date(Date.UTC(new Date().getUTCFullYear() + 1, 11, 31)),
         )),
       ],
+      patterns,
       employees: mayBookForOthers
-        ? (await hrService.listEmployees(["ACTIVE", "ON_LEAVE"])).map((e) => ({
+        ? bookable.map((e) => ({
             value: e.id,
             label: `${e.firstName} ${e.lastName}`,
           }))
@@ -54,6 +80,7 @@ export default async function NewLeavePage() {
         employees={data.employees}
         balances={data.balances}
         holidays={data.holidays}
+        patterns={data.patterns}
       />
     </>
   );

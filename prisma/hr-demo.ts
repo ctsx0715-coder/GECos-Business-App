@@ -1,6 +1,7 @@
 import { db } from "@/lib/database/client";
 import { nextReference } from "@/lib/database/reference-numbers";
 import { statutoryHolidays } from "@/modules/hr/public-holidays";
+import { PATTERN_ANCHOR } from "@/modules/hr/work-patterns";
 import type { ComplianceCategory, EmploymentType, LeaveAccrualMethod } from "@/generated/prisma/client";
 
 /**
@@ -333,9 +334,87 @@ function days(offset: number): Date {
   return date;
 }
 
+/**
+ * How Nopedi's people work.
+ *
+ * The office keeps an ordinary week; the sites work six days, which is the
+ * common arrangement in construction and the reason patterns exist at all;
+ * and the plant operator is on a rotation, which is the case a row of seven
+ * booleans could not have expressed.
+ */
+export const WORK_PATTERNS: Array<{
+  code: string;
+  name: string;
+  description: string;
+  cycleDays: number;
+  workingDayIndexes: number[];
+  hoursPerDay: number;
+  isDefault: boolean;
+}> = [
+  {
+    code: "OFFICE",
+    name: "Office — Monday to Friday",
+    description: "Eight hours a day, weekends off. The default for anyone not on site.",
+    cycleDays: 7,
+    workingDayIndexes: [0, 1, 2, 3, 4],
+    hoursPerDay: 8,
+    isDefault: true,
+  },
+  {
+    code: "SITE_6DAY",
+    name: "Site — six-day week",
+    description:
+      "Monday to Saturday. A week of leave costs six days rather than five, which is what it actually costs the site.",
+    cycleDays: 7,
+    workingDayIndexes: [0, 1, 2, 3, 4, 5],
+    hoursPerDay: 9,
+    isDefault: false,
+  },
+  {
+    code: "ROTATION_14_7",
+    name: "Rotation — 14 on, 7 off",
+    description:
+      "Fourteen days worked and seven off, repeating. Leave booked in the off week costs nothing, because nothing was going to be worked.",
+    cycleDays: 21,
+    workingDayIndexes: Array.from({ length: 14 }, (_, index) => index),
+    hoursPerDay: 10,
+    isDefault: false,
+  },
+];
+
+/** Who is on which pattern. Anybody unlisted is on the default. */
+const PATTERN_BY_PERSON: Record<string, string> = {
+  "Anele Dlamini": "SITE_6DAY",
+  "Jacob Mthembu": "SITE_6DAY",
+  "Katlego Sebego": "SITE_6DAY",
+  "Nomsa Zulu": "SITE_6DAY",
+  "Pieter van Wyk": "ROTATION_14_7",
+};
+
+/**
+ * A week of placements, so the roster opens with something on it.
+ *
+ * Relative to today rather than fixed dates, because a demonstration in
+ * March should not show an empty week that was full last November.
+ */
+const ROSTER: Array<{
+  who: string;
+  startsInDays: number;
+  endsInDays: number;
+  note?: string;
+}> = [
+  { who: "Anele Dlamini", startsInDays: 0, endsInDays: 11 },
+  { who: "Jacob Mthembu", startsInDays: 0, endsInDays: 4, note: "Workshop fabrication" },
+  { who: "Katlego Sebego", startsInDays: 0, endsInDays: 11 },
+  { who: "Pieter van Wyk", startsInDays: 1, endsInDays: 6, note: "Excavator" },
+  { who: "Nomsa Zulu", startsInDays: 7, endsInDays: 11, note: "Site office" },
+];
+
 export interface HrDemoSummary {
+  workPatterns: number;
   leaveTypes: number;
   publicHolidays: number;
+  rosterAssignments: number;
   employees: number;
   certifications: number;
   balances: number;
@@ -375,13 +454,41 @@ export async function seedHrDemo(params: {
 }): Promise<HrDemoSummary> {
   const { organisationId, userIds } = params;
   const summary: HrDemoSummary = {
+    workPatterns: 0,
     leaveTypes: 0,
     publicHolidays: 0,
+    rosterAssignments: 0,
     employees: 0,
     certifications: 0,
     balances: 0,
     leaveRequests: 0,
   };
+
+  // ---- Work patterns ------------------------------------------------------
+  const patternIds: Record<string, string> = {};
+  for (const spec of WORK_PATTERNS) {
+    const existing = await db.workPattern.findFirst({ where: { code: spec.code } });
+    if (existing) {
+      patternIds[spec.code] = existing.id;
+      continue;
+    }
+
+    const created = await db.workPattern.create({
+      data: {
+        organisationId,
+        code: spec.code,
+        name: spec.name,
+        description: spec.description,
+        cycleDays: spec.cycleDays,
+        workingDayIndexes: spec.workingDayIndexes,
+        anchorOn: PATTERN_ANCHOR,
+        hoursPerDay: spec.hoursPerDay,
+        isDefault: spec.isDefault,
+      },
+    });
+    patternIds[spec.code] = created.id;
+    summary.workPatterns += 1;
+  }
 
   // ---- Leave types --------------------------------------------------------
   const leaveTypeIds: Record<string, string> = {};
@@ -469,10 +576,21 @@ export async function seedHrDemo(params: {
           jobTitle: spec.jobTitle,
           department: spec.department,
           employmentType: spec.employmentType ?? "PERMANENT",
+          workPatternId: patternIds[PATTERN_BY_PERSON[fullName]] ?? null,
           startedAt: days(-spec.startedDaysAgo),
         },
       });
       summary.employees += 1;
+    } else if (!employee.workPatternId && PATTERN_BY_PERSON[fullName]) {
+      /*
+       * Somebody created before patterns existed. Giving them the pattern they
+       * actually work is the point of the exercise, and it is the one field
+       * this backfill will change on a record it did not create.
+       */
+      employee = await db.employee.update({
+        where: { id: employee.id },
+        data: { workPatternId: patternIds[PATTERN_BY_PERSON[fullName]] },
+      });
     }
     employeeIds[fullName] = employee.id;
 
@@ -540,6 +658,38 @@ export async function seedHrDemo(params: {
       });
       summary.certifications += 1;
     }
+  }
+
+  // ---- Roster -------------------------------------------------------------
+  // Placed on whichever project is running. Without one the placements still
+  // stand — a yard day is a real placement — so a tenant with no projects gets
+  // a roster rather than nothing.
+  const site = await db.project.findFirst({
+    where: { status: { in: ["ACTIVE", "PLANNING"] } },
+    select: { id: true },
+    orderBy: { createdAt: "asc" },
+  });
+
+  for (const spec of ROSTER) {
+    const employeeId = employeeIds[spec.who];
+    if (!employeeId) continue;
+
+    const already = await db.rosterAssignment.findFirst({
+      where: { employeeId, startsAt: days(spec.startsInDays) },
+    });
+    if (already) continue;
+
+    await db.rosterAssignment.create({
+      data: {
+        organisationId,
+        employeeId,
+        projectId: site?.id ?? null,
+        startsAt: days(spec.startsInDays),
+        endsAt: days(spec.endsInDays),
+        note: spec.note,
+      },
+    });
+    summary.rosterAssignments += 1;
   }
 
   // ---- Leave requests -----------------------------------------------------

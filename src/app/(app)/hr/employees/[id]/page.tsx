@@ -14,6 +14,7 @@ import {
   PageHeader,
 } from "@/components/ui";
 import { formatDate } from "@/lib/format";
+import { describePattern } from "@/modules/hr/work-patterns";
 import {
   AddCertificationInline,
   AdjustBalanceInline,
@@ -155,6 +156,15 @@ export default async function EmployeePage({
               ) : (
                 "—"
               )}
+            </Field>
+            <Field label="Works">
+              {employee.workPattern
+                ? describePattern({
+                    cycleDays: employee.workPattern.cycleDays,
+                    workingDayIndexes: employee.workPattern.workingDayIndexes,
+                    anchorOn: employee.workPattern.anchorOn,
+                  })
+                : "Default pattern"}
             </Field>
             <Field label="Email">{employee.email ?? "—"}</Field>
             <Field label="Phone">{employee.phone ?? "—"}</Field>

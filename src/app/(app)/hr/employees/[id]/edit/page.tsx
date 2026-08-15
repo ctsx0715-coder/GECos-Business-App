@@ -49,6 +49,10 @@ export default async function EditEmployeePage({
           value: user.id,
           label: `${user.firstName} ${user.lastName} (${user.email})`,
         })),
+        workPatterns: (await hrService.listWorkPatterns()).map((pattern) => ({
+          value: pattern.id,
+          label: pattern.isDefault ? `${pattern.name} (default)` : pattern.name,
+        })),
       };
     } catch (error) {
       if (error instanceof NotFoundError) return null;
@@ -82,9 +86,11 @@ export default async function EditEmployeePage({
           employmentType: employee.employmentType,
           status: employee.status,
           startedAt: employee.startedAt.toISOString().slice(0, 10),
+          workPatternId: employee.workPatternId ?? "",
         }}
         managers={data.managers}
         users={data.users}
+        workPatterns={data.workPatterns}
       />
     </>
   );

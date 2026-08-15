@@ -13,7 +13,7 @@ import {
   useFormAction,
 } from "@/components/forms";
 import { requestLeaveAction } from "../../actions";
-import { workingDaysBetween } from "@/modules/hr/public-holidays";
+import { DEFAULT_PATTERN, workingDaysBetween } from "@/modules/hr/work-patterns";
 import type { LeaveBalanceView } from "@/modules/hr/hr.service";
 
 interface Choice {
@@ -33,13 +33,29 @@ function workingDays(
   start: string,
   end: string,
   holidays: ReadonlySet<string>,
+  pattern: SerialisedPattern | undefined,
 ): number | null {
   if (!start || !end) return null;
   const from = new Date(`${start}T00:00:00Z`);
   const to = new Date(`${end}T00:00:00Z`);
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return null;
   if (to < from) return null;
-  return workingDaysBetween(from, to, holidays);
+
+  return workingDaysBetween(
+    from,
+    to,
+    holidays,
+    pattern
+      ? { ...pattern, anchorOn: new Date(pattern.anchorOn) }
+      : DEFAULT_PATTERN,
+  );
+}
+
+/** Dates cross the server boundary as strings, so the anchor arrives as one. */
+interface SerialisedPattern {
+  cycleDays: number;
+  workingDayIndexes: number[];
+  anchorOn: string;
 }
 
 export function LeaveForm({
@@ -48,6 +64,7 @@ export function LeaveForm({
   employees,
   balances,
   holidays,
+  patterns,
 }: {
   myEmployeeId: string | null;
   leaveTypes: Choice[];
@@ -55,6 +72,8 @@ export function LeaveForm({
   balances: LeaveBalanceView[];
   /** Days off in the window the form can book, as YYYY-MM-DD. */
   holidays: string[];
+  /** The working pattern of each person this form can book for. */
+  patterns: Record<string, SerialisedPattern>;
 }) {
   const router = useRouter();
   const { pending, message, fieldErrors, submit } = useFormAction();
@@ -66,7 +85,7 @@ export function LeaveForm({
   const [reason, setReason] = useState("");
 
   const holidayDates = useMemo(() => new Set(holidays), [holidays]);
-  const days = workingDays(startsAt, endsAt, holidayDates);
+  const days = workingDays(startsAt, endsAt, holidayDates, patterns[employeeId]);
   const balance = balances.find((b) => b.leaveTypeId === leaveTypeId);
   const wouldOverdraw =
     balance && !balance.isUncapped && days !== null && days > balance.remainingDays;

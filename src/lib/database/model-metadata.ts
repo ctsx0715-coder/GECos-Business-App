@@ -12,6 +12,8 @@
 /** Models carrying an `organisationId` that the extension must scope. */
 export const TENANT_SCOPED_MODELS = new Set<string>([
   "Employee",
+  "RosterAssignment",
+  "WorkPattern",
   "LeaveType",
   "LeaveBalance",
   "LeaveRequest",
@@ -57,6 +59,8 @@ export const UNSCOPED_MODELS = new Map<string, string>([
 /** Models with `deletedAt`, where delete becomes an update (ADR-007). */
 export const SOFT_DELETE_MODELS = new Set<string>([
   "Employee",
+  "RosterAssignment",
+  "WorkPattern",
   "LeaveType",
   "LeaveRequest",
   "PublicHoliday",
@@ -86,6 +90,8 @@ export const SOFT_DELETE_MODELS = new Set<string>([
 /** Models with a `recordStatus` column to keep in step with `deletedAt`. */
 export const RECORD_STATUS_MODELS = new Set<string>([
   "Employee",
+  "RosterAssignment",
+  "WorkPattern",
   "LeaveType",
   "LeaveRequest",
   "PublicHoliday",
@@ -110,6 +116,8 @@ export const RECORD_STATUS_MODELS = new Set<string>([
 /** Models carrying `createdBy` / `updatedBy` for the extension to stamp. */
 export const ACTOR_STAMPED_MODELS = new Set<string>([
   "Employee",
+  "RosterAssignment",
+  "WorkPattern",
   "LeaveType",
   "LeaveRequest",
   "PublicHoliday",

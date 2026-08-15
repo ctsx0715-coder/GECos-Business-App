@@ -25,6 +25,8 @@ export const createEmployeeSchema = z.object({
   managerId: z.uuid().optional(),
   /** Links the employee to a login, where they have one. */
   userId: z.uuid().optional(),
+  /** Which days they work. Omitted means the tenant's default pattern. */
+  workPatternId: z.uuid().optional(),
   employmentType: z
     .enum(["PERMANENT", "FIXED_TERM", "TEMPORARY", "CONTRACTOR", "APPRENTICE"])
     .default("PERMANENT"),
@@ -39,6 +41,8 @@ export const updateEmployeeSchema = createEmployeeSchema
   .extend({
     startedAt: z.coerce.date().optional(),
     status: z.enum(["ACTIVE", "ON_LEAVE", "SUSPENDED", "EXITED"]).optional(),
+    /** Null puts them back on the tenant's default pattern. */
+    workPatternId: z.uuid().nullable().optional(),
   });
 
 export const exitEmployeeSchema = z.object({
@@ -161,6 +165,59 @@ export const removeCertificationSchema = z.object({
   certificationId: z.uuid(),
 });
 
+/**
+ * A working pattern.
+ *
+ * The indexes are validated against the cycle length rather than against a
+ * week, because a fortnightly rotation is the case this shape exists for.
+ */
+const workPatternFields = {
+  name: z.string().trim().min(2, "Name the pattern."),
+  description: z.string().trim().max(1000).optional(),
+  cycleDays: z
+    .number()
+    .int()
+    .min(1)
+    .max(56, "A cycle longer than eight weeks is almost certainly a mistake."),
+  workingDayIndexes: z
+    .array(z.number().int().min(0).max(55))
+    .min(1, "Somebody has to work at least one day."),
+  hoursPerDay: z.number().positive().max(24).default(8),
+  isDefault: z.boolean().default(false),
+};
+
+export const createWorkPatternSchema = z
+  .object({
+    code: z
+      .string()
+      .trim()
+      .min(2)
+      .max(20)
+      .regex(/^[A-Z0-9_]+$/, "Use capitals, digits and underscores."),
+    ...workPatternFields,
+  })
+  .refine(
+    (data) => data.workingDayIndexes.every((index) => index < data.cycleDays),
+    {
+      message: "A working day falls outside the cycle.",
+      path: ["workingDayIndexes"],
+    },
+  );
+
+export const updateWorkPatternSchema = z
+  .object({
+    workPatternId: z.uuid(),
+    ...workPatternFields,
+    isActive: z.boolean().default(true),
+  })
+  .refine(
+    (data) => data.workingDayIndexes.every((index) => index < data.cycleDays),
+    {
+      message: "A working day falls outside the cycle.",
+      path: ["workingDayIndexes"],
+    },
+  );
+
 export const addHolidaySchema = z.object({
   observedOn: z.coerce.date(),
   name: z.string().trim().min(2, "Name the day."),
@@ -201,4 +258,29 @@ export const decideLeaveSchema = z.object({
 export const cancelLeaveSchema = z.object({
   requestId: z.uuid(),
   reason: z.string().trim().max(2000).optional(),
+});
+
+/**
+ * Placing somebody on a site for a stretch of days.
+ *
+ * A range rather than a day, because a fortnight on one site is one decision.
+ * Which days inside it they actually work is read from their pattern, not
+ * asked for here.
+ */
+export const assignToRosterSchema = z
+  .object({
+    employeeId: z.uuid(),
+    /** Null is a placement with no project — a yard day, or training. */
+    projectId: z.uuid().nullable().optional(),
+    startsAt: z.coerce.date(),
+    endsAt: z.coerce.date(),
+    note: z.string().trim().max(500).optional(),
+  })
+  .refine((data) => data.endsAt >= data.startsAt, {
+    message: "The last day is before the first day.",
+    path: ["endsAt"],
+  });
+
+export const removeAssignmentSchema = z.object({
+  assignmentId: z.uuid(),
 });

@@ -101,6 +101,10 @@ export const PERMISSIONS = {
   /// Writing entitlements. Separate from approving, because someone who can
   /// top up a balance and approve against it needs no approver at all.
   "hr.leave.configure": MODULES.HR,
+  /// Seeing who is placed where. Wider than managing it: a foreman needs to
+  /// read next week's roster without being able to rewrite it.
+  "hr.roster.view": MODULES.HR,
+  "hr.roster.manage": MODULES.HR,
 
   // Documents
   "documents.document.view": MODULES.DOCUMENTS,
@@ -214,6 +218,10 @@ export const SYSTEM_ROLES: Record<
       "hr.leave.view",
       "hr.leave.request",
       "hr.leave.approve",
+      // Places their own crews, which is most of what a project manager does
+      // with people in a week.
+      "hr.roster.view",
+      "hr.roster.manage",
     ],
   },
   /**
@@ -235,6 +243,8 @@ export const SYSTEM_ROLES: Record<
       "hr.leave.request",
       "hr.leave.approve",
       "hr.leave.configure",
+      "hr.roster.view",
+      "hr.roster.manage",
       "core.users.view",
       "documents.document.view",
       "documents.document.upload",
@@ -251,6 +261,8 @@ export const SYSTEM_ROLES: Record<
       "projects.expense.submit",
       // Requesting leave is baseline. Seeing anyone else's is not.
       "hr.leave.request",
+      // Where the crew is this week is not a secret from the crew.
+      "hr.roster.view",
     ],
   },
 };
