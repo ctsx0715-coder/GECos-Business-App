@@ -90,12 +90,22 @@ Each leave type says how it is credited:
 | Granted at the start of the cycle | The full entitlement on day one, or on a joiner's first day. Not pro-rated |
 | Accrues each completed month | A fixed number of days per calendar month worked in full. 1.25 reaches the BCEA's 15-day minimum, and a joiner pro-rates themselves |
 
+The same run carries unused days across the year boundary, up to each type's
+carry-over limit. It is part of the accrual run rather than a January job of
+its own, because a job that only fires on 1 January costs somebody their leave
+the first time GitHub skips it — and the figure is recomputed from the closing
+cycle rather than accumulated, so running it in March lands on the same answer.
+
 `pnpm hr:accrue` runs on the first of every month from GitHub Actions, and the
 leave policy screen has a button that calls the same service. Both are safe to
 repeat: every balance records the date it has been credited to, so a second run
 the same day credits nothing and a run missed for a quarter catches up all
 three months. The arithmetic is in `src/modules/hr/leave-accrual.ts`, with no
 database in it, and `leave-accrual.test.ts` drives it across a year.
+
+Not yet handled: the BCEA's rule that carried days expire six months into the
+new cycle. That needs a date the ledger does not record, so it is left undone
+rather than half-done.
 
 A cycle is the calendar year. An organisation whose leave year runs March to
 February is a policy answer we do not have yet, and it changes one function.

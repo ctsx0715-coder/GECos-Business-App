@@ -17,6 +17,7 @@ import { formatDate } from "@/lib/format";
 import {
   AddCertificationInline,
   AdjustBalanceInline,
+  EndEmployment,
   RemoveCertification,
 } from "./manage";
 
@@ -79,10 +80,18 @@ export default async function EmployeePage({
           .filter((type) => type.daysPerCycle !== null)
           .map((type) => ({ value: type.id, label: type.name })),
         mayEdit: session.permissions.has("hr.employee.edit"),
+        mayExit: session.permissions.has("hr.employee.exit"),
         mayManageCertifications: session.permissions.has(
           "hr.certification.manage",
         ),
         mayConfigureLeave: session.permissions.has("hr.leave.configure"),
+        /*
+         * Their own record, reached through "My record". The buttons an
+         * employee needs here are not the ones HR needs: booking their own
+         * leave, and nothing else.
+         */
+        isMine: (await hrService.myEmployeeId()) === id,
+        mayRequestLeave: session.permissions.has("hr.leave.request"),
       };
     } catch (error) {
       if (error instanceof NotFoundError) return null;
@@ -108,6 +117,11 @@ export default async function EmployeePage({
             >
               {employee.status.replace("_", " ").toLowerCase()}
             </Badge>
+            {data.isMine && data.mayRequestLeave && employee.status !== "EXITED" && (
+              <ButtonLink href="/hr/leave/new" icon="calendar">
+                Request leave
+              </ButtonLink>
+            )}
             {data.mayEdit && (
               <ButtonLink href={`/hr/employees/${employee.id}/edit`} icon="pencil">
                 Edit
@@ -157,6 +171,12 @@ export default async function EmployeePage({
             <p className="border-t border-border px-5 py-3 text-xs text-muted">
               {employee.exitReason}
             </p>
+          )}
+          {data.mayExit && employee.status !== "EXITED" && (
+            <EndEmployment
+              employeeId={employee.id}
+              name={employee.firstName}
+            />
           )}
         </Card>
 

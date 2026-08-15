@@ -54,6 +54,26 @@ export async function updateEmployeeAction(
   return result;
 }
 
+/**
+ * Ending someone's employment.
+ *
+ * Revalidates the leave register too: the service cancels leave booked for
+ * after their last day, and a queue still offering those requests for approval
+ * would be showing decisions nobody can take.
+ */
+export async function exitEmployeeAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.exitEmployee(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath(`/hr/employees/${String(input.employeeId)}`);
+  revalidatePath("/hr/employees");
+  revalidatePath("/hr/leave");
+  return result;
+}
+
 export async function addCertificationAction(
   input: Record<string, unknown>,
 ): Promise<FormResult> {

@@ -18,7 +18,12 @@ import {
 } from "@/schemas/hr.schema";
 import type { EmployeeStatus, LeaveRequestStatus } from "@/generated/prisma/client";
 import { hrRepository } from "./hr.repository";
-import { accrualFor, cycleFor } from "./leave-accrual";
+import {
+  accrualFor,
+  carryOverFor,
+  cycleFor,
+  previousCycle,
+} from "./leave-accrual";
 
 /**
  * HR business logic.
@@ -78,8 +83,17 @@ export const hrService = {
     return hrRepository.listEmployees(status);
   },
 
+  /**
+   * One person's record.
+   *
+   * Your own needs no permission, which is the rule the leave and
+   * certification methods already followed — and until now the one thing that
+   * made them unreachable: both are read on the record screen, and the screen
+   * itself demanded the permission that lets HR read everybody's. A site
+   * supervisor could hold a balance they were not allowed to look at.
+   */
   async getEmployee(id: string) {
-    await requirePermission("hr.employee.view");
+    await this.assertMaySeeEmployee(id);
     const employee = await hrRepository.findEmployee(id);
     if (!employee) throw new NotFoundError("Employee");
     return employee;
@@ -436,7 +450,22 @@ export const hrService = {
       balancesCreated: 0,
       balancesCredited: 0,
       daysCredited: 0,
+      balancesCarried: 0,
+      daysCarriedOver: 0,
     };
+
+    /*
+     * Carry over first, then accrue.
+     *
+     * Both open the new cycle's balance, and the order decides what it looks
+     * like when it is opened: days brought forward, then this cycle's own
+     * entitlement credited on top. The other way round works too, but leaves a
+     * moment where a balance exists claiming nothing was carried, which is
+     * exactly the state somebody would screenshot on 1 January.
+     */
+    const carried = await this.carryOverInto(cycle, employees);
+    summary.balancesCarried = carried.balances;
+    summary.daysCarriedOver = carried.days;
 
     for (const leaveType of types) {
       const existing = await hrRepository.balancesForCycle(
@@ -497,6 +526,91 @@ export const hrService = {
 
     summary.daysCredited = Math.round(summary.daysCredited * 100) / 100;
     return summary;
+  },
+
+  /**
+   * Bring unused days across the cycle boundary.
+   *
+   * Without this, `carryOverMaxDays` is a column nobody reads and every unused
+   * day disappears at midnight on 31 December — which is a policy some
+   * employers do have, but not one anybody chose here, and not one that should
+   * arrive by omission.
+   *
+   * It runs on every accrual run rather than only in January, because a run
+   * that GitHub skipped on New Year's Day must not cost anybody their leave,
+   * and because recomputing from the closing cycle is safe to repeat: the
+   * figure is derived, not accumulated. It also means an adjustment made to
+   * last year in February corrects this year's opening balance at the next
+   * run rather than needing a second act of memory.
+   */
+  async carryOverInto(
+    cycle: { startsAt: Date; endsAt: Date },
+    employees: Array<{ id: string; startedAt: Date }>,
+  ) {
+    const closing = previousCycle(cycle);
+    const types = await hrRepository.listLeaveTypes();
+    const result = { balances: 0, days: 0 };
+
+    for (const leaveType of types) {
+      if (leaveType.carryOverMaxDays === null) continue;
+      const cap = Number(leaveType.carryOverMaxDays);
+      if (cap <= 0) continue;
+
+      const previous = await hrRepository.balancesForCycle(
+        leaveType.id,
+        closing.startsAt,
+      );
+      if (previous.length === 0) continue;
+
+      const current = new Map(
+        (await hrRepository.balancesForCycle(leaveType.id, cycle.startsAt)).map(
+          (row) => [row.employeeId, row],
+        ),
+      );
+      const stillHere = new Set(employees.map((employee) => employee.id));
+
+      for (const closingBalance of previous) {
+        // Somebody who has left keeps their history and carries nothing into a
+        // year they will not work.
+        if (!stillHere.has(closingBalance.employeeId)) continue;
+
+        const days = carryOverFor({
+          carryOverMaxDays: cap,
+          previous: {
+            entitledDays: Number(closingBalance.entitledDays),
+            broughtForwardDays: Number(closingBalance.broughtForwardDays),
+            takenDays: Number(closingBalance.takenDays),
+          },
+        });
+
+        const existing = current.get(closingBalance.employeeId);
+
+        if (!existing) {
+          if (days === 0) continue;
+          await hrRepository.upsertBalance(
+            {
+              employeeId: closingBalance.employeeId,
+              leaveTypeId: leaveType.id,
+              cycleStartsAt: cycle.startsAt,
+            },
+            {
+              cycleEndsAt: cycle.endsAt,
+              entitledDays: 0,
+              broughtForwardDays: days,
+            },
+          );
+        } else {
+          if (Number(existing.broughtForwardDays) === days) continue;
+          await hrRepository.setBroughtForward(existing.id, days);
+        }
+
+        result.balances += 1;
+        result.days += days;
+      }
+    }
+
+    result.days = Math.round(result.days * 100) / 100;
+    return result;
   },
 
   async balancesFor(employeeId: string): Promise<LeaveBalanceView[]> {

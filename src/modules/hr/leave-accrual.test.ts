@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { accrualFor, cycleFor, monthBoundariesBetween } from "./leave-accrual";
+import {
+  accrualFor,
+  carryOverFor,
+  cycleFor,
+  monthBoundariesBetween,
+  previousCycle,
+} from "./leave-accrual";
 
 /**
  * The accrual arithmetic, driven directly.
@@ -181,5 +187,50 @@ describe("manual types", () => {
 
   it("and neither does a monthly type with no rate set", () => {
     expect(monthly({ daysPerPeriod: null }).creditDays).toBe(0);
+  });
+});
+
+describe("carrying leave over", () => {
+  const closing = { entitledDays: 15, broughtForwardDays: 0, takenDays: 9 };
+
+  it("carries the unused days when they fit under the cap", () => {
+    expect(carryOverFor({ carryOverMaxDays: 10, previous: closing })).toBe(6);
+  });
+
+  it("carries no more than the cap", () => {
+    expect(carryOverFor({ carryOverMaxDays: 5, previous: closing })).toBe(5);
+  });
+
+  it("carries nothing when the policy allows none", () => {
+    expect(carryOverFor({ carryOverMaxDays: null, previous: closing })).toBe(0);
+    expect(carryOverFor({ carryOverMaxDays: 0, previous: closing })).toBe(0);
+  });
+
+  it("counts days brought in last year as carryable this year", () => {
+    expect(
+      carryOverFor({
+        carryOverMaxDays: 5,
+        previous: { entitledDays: 15, broughtForwardDays: 3, takenDays: 16 },
+      }),
+    ).toBe(2);
+  });
+
+  it("never carries a negative balance forward", () => {
+    expect(
+      carryOverFor({
+        carryOverMaxDays: 5,
+        previous: { entitledDays: 15, broughtForwardDays: 0, takenDays: 18 },
+      }),
+    ).toBe(0);
+  });
+
+  it("carries nothing when there was no previous cycle", () => {
+    expect(carryOverFor({ carryOverMaxDays: 5, previous: null })).toBe(0);
+  });
+
+  it("finds the cycle that just closed", () => {
+    const cycle = previousCycle(cycleFor(new Date("2026-01-01T00:00:00Z")));
+    expect(cycle.startsAt.toISOString().slice(0, 10)).toBe("2025-01-01");
+    expect(cycle.endsAt.toISOString().slice(0, 10)).toBe("2025-12-31");
   });
 });
