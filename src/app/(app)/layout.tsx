@@ -155,6 +155,15 @@ const NAV: NavItem[] = [
     parent: PEOPLE,
   },
   {
+    href: "/hr/roster",
+    label: "Roster",
+    icon: "grid",
+    moduleKey: "hr",
+    permission: "hr.roster.view",
+    group: "main",
+    parent: PEOPLE,
+  },
+  {
     href: "/hr/work-patterns",
     label: "Work patterns",
     icon: "clock",

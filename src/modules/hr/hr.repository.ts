@@ -282,6 +282,73 @@ export const hrRepository = {
     });
   },
 
+  /*
+   * Sites to place people on.
+   *
+   * A narrow projection of projects — id, name, reference — rather than a call
+   * into the projects service, which would demand projects.project.view. An HR
+   * Manager rostering a crew needs the names of the sites; that is not the same
+   * as access to budgets, tasks and margins, and granting the wider permission
+   * to get the narrower fact is how permissions stop meaning anything.
+   */
+  listProjectsForRoster() {
+    return db.project.findMany({
+      where: { status: { in: ["PLANNING", "ACTIVE", "ON_HOLD"] } },
+      select: { id: true, name: true, reference: true },
+      orderBy: { name: "asc" },
+    });
+  },
+
+  /** Assignments overlapping a window, with enough to render a roster row. */
+  listAssignments(from: Date, to: Date, filter?: { projectId?: string }) {
+    return db.rosterAssignment.findMany({
+      where: {
+        startsAt: { lte: to },
+        endsAt: { gte: from },
+        ...(filter?.projectId ? { projectId: filter.projectId } : {}),
+      },
+      orderBy: { startsAt: "asc" },
+      include: {
+        employee: { select: EMPLOYEE_SUMMARY },
+        project: { select: { id: true, name: true, reference: true } },
+      },
+    });
+  },
+
+  findAssignment(id: string) {
+    return db.rosterAssignment.findUnique({ where: { id } });
+  },
+
+  /** Assignments for one person that collide with a range. */
+  overlappingAssignments(
+    employeeId: string,
+    startsAt: Date,
+    endsAt: Date,
+    excludeId?: string,
+  ) {
+    return db.rosterAssignment.findMany({
+      where: {
+        employeeId,
+        startsAt: { lte: endsAt },
+        endsAt: { gte: startsAt },
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+      },
+      include: { project: { select: { name: true } } },
+    });
+  },
+
+  createAssignment(
+    data: Omit<Prisma.RosterAssignmentUncheckedCreateInput, "organisationId">,
+  ) {
+    return db.rosterAssignment.create({
+      data: { ...data, organisationId: tenant() },
+    });
+  },
+
+  deleteAssignment(id: string) {
+    return db.rosterAssignment.delete({ where: { id } });
+  },
+
   listHolidays(from: Date, to: Date) {
     return db.publicHoliday.findMany({
       where: { observedOn: { gte: from, lte: to } },

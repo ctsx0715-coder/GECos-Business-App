@@ -259,3 +259,28 @@ export const cancelLeaveSchema = z.object({
   requestId: z.uuid(),
   reason: z.string().trim().max(2000).optional(),
 });
+
+/**
+ * Placing somebody on a site for a stretch of days.
+ *
+ * A range rather than a day, because a fortnight on one site is one decision.
+ * Which days inside it they actually work is read from their pattern, not
+ * asked for here.
+ */
+export const assignToRosterSchema = z
+  .object({
+    employeeId: z.uuid(),
+    /** Null is a placement with no project — a yard day, or training. */
+    projectId: z.uuid().nullable().optional(),
+    startsAt: z.coerce.date(),
+    endsAt: z.coerce.date(),
+    note: z.string().trim().max(500).optional(),
+  })
+  .refine((data) => data.endsAt >= data.startsAt, {
+    message: "The last day is before the first day.",
+    path: ["endsAt"],
+  });
+
+export const removeAssignmentSchema = z.object({
+  assignmentId: z.uuid(),
+});

@@ -5,6 +5,7 @@ import { requirePermission, hasPermission } from "@/lib/permissions";
 import {
   addHolidaySchema,
   adjustBalanceSchema,
+  assignToRosterSchema,
   cancelLeaveSchema,
   certificationSchema,
   createEmployeeSchema,
@@ -13,6 +14,7 @@ import {
   decideLeaveSchema,
   exitEmployeeSchema,
   generateHolidaysSchema,
+  removeAssignmentSchema,
   removeCertificationSchema,
   removeHolidaySchema,
   requestLeaveSchema,
@@ -34,6 +36,7 @@ import {
   DEFAULT_PATTERN,
   PATTERN_ANCHOR,
   workingDaysBetween as countWorkingDays,
+  workingDaysIn,
   type WorkPatternShape,
 } from "./work-patterns";
 
@@ -721,6 +724,142 @@ export const hrService = {
       await hrRepository.clearDefaultWorkPattern(workPatternId);
     }
     return updated;
+  },
+
+  // -- Roster ---------------------------------------------------------------
+
+  /** The sites a person can be placed on. */
+  async rosterProjects() {
+    await requirePermission("hr.roster.view");
+    return hrRepository.listProjectsForRoster();
+  },
+
+  /**
+   * Who is where, over a window.
+   *
+   * Returns the assignments alongside the days each person is actually due in
+   * — their pattern, less public holidays — and the leave they have booked.
+   * A roster that shows somebody placed on a site during their approved leave
+   * is worse than no roster, because somebody will plan around it.
+   */
+  async rosterFor(from: Date, to: Date, filter?: { projectId?: string }) {
+    await requirePermission("hr.roster.view");
+
+    const [assignments, holidays] = await Promise.all([
+      hrRepository.listAssignments(from, to, filter),
+      this.holidayDatesBetween(from, to),
+    ]);
+
+    const employees = await hrRepository.listEmployees([
+      "ACTIVE",
+      "ON_LEAVE",
+      "SUSPENDED",
+    ]);
+
+    const leave = await hrRepository.listLeaveRequests({
+      status: ["SUBMITTED", "APPROVED"],
+    });
+    const inWindow = leave.filter(
+      (request) => request.startsAt <= to && request.endsAt >= from,
+    );
+
+    const people = await Promise.all(
+      employees.map(async (employee) => {
+        const pattern = await this.patternForEmployee(employee);
+        return {
+          id: employee.id,
+          name: `${employee.firstName} ${employee.lastName}`,
+          jobTitle: employee.jobTitle,
+          /** Days they are due in: their pattern, less the days off. */
+          workingDays: workingDaysIn(from, to, holidays, pattern),
+          assignments: assignments
+            .filter((assignment) => assignment.employeeId === employee.id)
+            .map((assignment) => ({
+              id: assignment.id,
+              projectId: assignment.projectId,
+              projectName: assignment.project?.name ?? null,
+              startsAt: assignment.startsAt,
+              endsAt: assignment.endsAt,
+              note: assignment.note,
+            })),
+          leave: inWindow
+            .filter((request) => request.employeeId === employee.id)
+            .map((request) => ({
+              id: request.id,
+              status: request.status,
+              leaveTypeName: request.leaveType.name,
+              startsAt: request.startsAt,
+              endsAt: request.endsAt,
+            })),
+        };
+      }),
+    );
+
+    return { people, holidays: [...holidays] };
+  },
+
+  /**
+   * Placing somebody.
+   *
+   * Two clashes are refused outright, because both mean the plan is wrong
+   * rather than merely tight: being in two places at once, and being placed
+   * across leave that has already been approved. Leave still only requested is
+   * a warning rather than a refusal — the roster is often what decides whether
+   * that request gets approved.
+   */
+  async assignToRoster(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const data = assignToRosterSchema.parse(input);
+
+    const employee = await hrRepository.findEmployee(data.employeeId);
+    if (!employee) throw new NotFoundError("Employee");
+    if (employee.status === "EXITED") {
+      throw new BusinessRuleError(
+        "That employee has left, so they cannot be placed on a site.",
+      );
+    }
+
+    const clashes = await hrRepository.overlappingAssignments(
+      data.employeeId,
+      data.startsAt,
+      data.endsAt,
+    );
+    if (clashes.length > 0) {
+      const where = clashes[0].project?.name ?? "an unassigned placement";
+      throw new BusinessRuleError(
+        `${employee.firstName} is already placed on ${where} over those dates.`,
+      );
+    }
+
+    const approvedLeave = employee.leaveRequests.filter(
+      (request) =>
+        request.status === "APPROVED" &&
+        request.startsAt <= data.endsAt &&
+        request.endsAt >= data.startsAt,
+    );
+    if (approvedLeave.length > 0) {
+      throw new BusinessRuleError(
+        `${employee.firstName} has approved leave over those dates.`,
+      );
+    }
+
+    return hrRepository.createAssignment({
+      employeeId: data.employeeId,
+      projectId: data.projectId ?? null,
+      startsAt: data.startsAt,
+      endsAt: data.endsAt,
+      note: data.note,
+    });
+  },
+
+  async removeAssignment(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const data = removeAssignmentSchema.parse(input);
+
+    const assignment = await hrRepository.findAssignment(data.assignmentId);
+    if (!assignment) throw new NotFoundError("Roster assignment");
+
+    return hrRepository.deleteAssignment(data.assignmentId);
   },
 
   // -- Public holidays ------------------------------------------------------

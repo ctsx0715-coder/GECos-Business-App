@@ -391,10 +391,30 @@ const PATTERN_BY_PERSON: Record<string, string> = {
   "Pieter van Wyk": "ROTATION_14_7",
 };
 
+/**
+ * A week of placements, so the roster opens with something on it.
+ *
+ * Relative to today rather than fixed dates, because a demonstration in
+ * March should not show an empty week that was full last November.
+ */
+const ROSTER: Array<{
+  who: string;
+  startsInDays: number;
+  endsInDays: number;
+  note?: string;
+}> = [
+  { who: "Anele Dlamini", startsInDays: 0, endsInDays: 11 },
+  { who: "Jacob Mthembu", startsInDays: 0, endsInDays: 4, note: "Workshop fabrication" },
+  { who: "Katlego Sebego", startsInDays: 0, endsInDays: 11 },
+  { who: "Pieter van Wyk", startsInDays: 1, endsInDays: 6, note: "Excavator" },
+  { who: "Nomsa Zulu", startsInDays: 7, endsInDays: 11, note: "Site office" },
+];
+
 export interface HrDemoSummary {
   workPatterns: number;
   leaveTypes: number;
   publicHolidays: number;
+  rosterAssignments: number;
   employees: number;
   certifications: number;
   balances: number;
@@ -437,6 +457,7 @@ export async function seedHrDemo(params: {
     workPatterns: 0,
     leaveTypes: 0,
     publicHolidays: 0,
+    rosterAssignments: 0,
     employees: 0,
     certifications: 0,
     balances: 0,
@@ -637,6 +658,38 @@ export async function seedHrDemo(params: {
       });
       summary.certifications += 1;
     }
+  }
+
+  // ---- Roster -------------------------------------------------------------
+  // Placed on whichever project is running. Without one the placements still
+  // stand — a yard day is a real placement — so a tenant with no projects gets
+  // a roster rather than nothing.
+  const site = await db.project.findFirst({
+    where: { status: { in: ["ACTIVE", "PLANNING"] } },
+    select: { id: true },
+    orderBy: { createdAt: "asc" },
+  });
+
+  for (const spec of ROSTER) {
+    const employeeId = employeeIds[spec.who];
+    if (!employeeId) continue;
+
+    const already = await db.rosterAssignment.findFirst({
+      where: { employeeId, startsAt: days(spec.startsInDays) },
+    });
+    if (already) continue;
+
+    await db.rosterAssignment.create({
+      data: {
+        organisationId,
+        employeeId,
+        projectId: site?.id ?? null,
+        startsAt: days(spec.startsInDays),
+        endsAt: days(spec.endsInDays),
+        note: spec.note,
+      },
+    });
+    summary.rosterAssignments += 1;
   }
 
   // ---- Leave requests -----------------------------------------------------

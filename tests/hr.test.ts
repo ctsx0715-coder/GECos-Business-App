@@ -1074,3 +1074,164 @@ describe("work patterns", () => {
     ).rejects.toBeInstanceOf(ForbiddenError);
   });
 });
+
+describe("the roster", () => {
+  const WEEK = monday(3);
+
+  async function place(
+    employeeId: string,
+    startsAt: Date,
+    endsAt: Date,
+    as_ = "hr_manager",
+  ) {
+    return as(as_, () =>
+      hrService.assignToRoster({ employeeId, startsAt, endsAt }),
+    );
+  }
+
+  it("places somebody and shows them on the week", async () => {
+    const employee = await anEmployee();
+    await place(employee.id, WEEK, plus(WEEK, 4));
+
+    const roster = await as("hr_manager", () =>
+      hrService.rosterFor(WEEK, plus(WEEK, 6)),
+    );
+    const person = roster.people.find((row) => row.id === employee.id);
+    expect(person?.assignments).toHaveLength(1);
+    // Monday to Friday, on the default pattern.
+    expect(person?.workingDays).toHaveLength(5);
+  });
+
+  it("refuses to put one person in two places at once", async () => {
+    const employee = await anEmployee();
+    await place(employee.id, WEEK, plus(WEEK, 4));
+
+    await expect(
+      place(employee.id, plus(WEEK, 2), plus(WEEK, 6)),
+    ).rejects.toBeInstanceOf(BusinessRuleError);
+  });
+
+  it("refuses to place somebody across approved leave", async () => {
+    const employee = await anEmployee({ userId: org.userIds.employee });
+    const type = await annualLeave(15);
+    await withBalance(employee.id, type.id, 15);
+
+    const request = await as("employee", () =>
+      hrService.requestLeave({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        startsAt: WEEK,
+        endsAt: plus(WEEK, 4),
+      }),
+    );
+    await as("hr_manager", () =>
+      hrService.decideLeave({ requestId: request.id, decision: "APPROVED" }),
+    );
+
+    await expect(place(employee.id, WEEK, plus(WEEK, 2))).rejects.toBeInstanceOf(
+      BusinessRuleError,
+    );
+  });
+
+  it("allows a placement over leave that is only requested, and shows both", async () => {
+    const employee = await anEmployee({ userId: org.userIds.employee });
+    const type = await annualLeave(15);
+    await withBalance(employee.id, type.id, 15);
+
+    await as("employee", () =>
+      hrService.requestLeave({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        startsAt: WEEK,
+        endsAt: plus(WEEK, 4),
+      }),
+    );
+
+    // The roster is often what decides whether that request is approved, so
+    // planning against it is allowed and the clash is shown rather than hidden.
+    await place(employee.id, WEEK, plus(WEEK, 2));
+
+    const roster = await as("hr_manager", () =>
+      hrService.rosterFor(WEEK, plus(WEEK, 6)),
+    );
+    const person = roster.people.find((row) => row.id === employee.id);
+    expect(person?.assignments).toHaveLength(1);
+    expect(person?.leave).toHaveLength(1);
+  });
+
+  it("shows only the days a six-day week actually works", async () => {
+    const pattern = await as("hr_manager", () =>
+      hrService.createWorkPattern({
+        code: "SITE_6DAY",
+        name: "Site",
+        cycleDays: 7,
+        workingDayIndexes: [0, 1, 2, 3, 4, 5],
+      }),
+    );
+    const employee = await anEmployee({ workPatternId: pattern.id });
+
+    const roster = await as("hr_manager", () =>
+      hrService.rosterFor(WEEK, plus(WEEK, 6)),
+    );
+    const person = roster.people.find((row) => row.id === employee.id);
+    expect(person?.workingDays).toHaveLength(6);
+  });
+
+  it("drops a public holiday out of the working days", async () => {
+    const employee = await anEmployee();
+    await as("hr_manager", () =>
+      hrService.addHoliday({ observedOn: plus(WEEK, 2), name: "Shutdown" }),
+    );
+
+    const roster = await as("hr_manager", () =>
+      hrService.rosterFor(WEEK, plus(WEEK, 6)),
+    );
+    const person = roster.people.find((row) => row.id === employee.id);
+    expect(person?.workingDays).toHaveLength(4);
+  });
+
+  it("will not place somebody who has left", async () => {
+    const employee = await anEmployee();
+    await as("hr_manager", () =>
+      hrService.exitEmployee({
+        employeeId: employee.id,
+        endedAt: new Date(),
+        reason: "Resigned.",
+      }),
+    );
+
+    await expect(place(employee.id, WEEK, plus(WEEK, 2))).rejects.toBeInstanceOf(
+      BusinessRuleError,
+    );
+  });
+
+  it("lets a site supervisor read the roster but not rewrite it", async () => {
+    const employee = await anEmployee();
+    await place(employee.id, WEEK, plus(WEEK, 2));
+
+    const roster = await as("employee", () =>
+      hrService.rosterFor(WEEK, plus(WEEK, 6)),
+    );
+    expect(roster.people.length).toBeGreaterThan(0);
+
+    await expect(
+      place(employee.id, plus(WEEK, 10), plus(WEEK, 12), "employee"),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("frees the days again when a placement is removed", async () => {
+    const employee = await anEmployee();
+    const assignment = await place(employee.id, WEEK, plus(WEEK, 4));
+
+    await as("hr_manager", () =>
+      hrService.removeAssignment({ assignmentId: assignment.id }),
+    );
+
+    const roster = await as("hr_manager", () =>
+      hrService.rosterFor(WEEK, plus(WEEK, 6)),
+    );
+    expect(
+      roster.people.find((row) => row.id === employee.id)?.assignments,
+    ).toHaveLength(0);
+  });
+});

@@ -273,3 +273,26 @@ export async function updateWorkPatternAction(
   revalidatePath("/hr/leave/new");
   return result;
 }
+
+export async function assignToRosterAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.assignToRoster(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath("/hr/roster");
+  return result;
+}
+
+export async function removeAssignmentAction(
+  assignmentId: string,
+): Promise<ActionResult> {
+  const result = await run(() =>
+    withSession(async () => {
+      await hrService.removeAssignment({ assignmentId });
+    }),
+  );
+  revalidatePath("/hr/roster");
+  return result;
+}

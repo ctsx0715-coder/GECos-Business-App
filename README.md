@@ -126,6 +126,23 @@ days is 15 working days on a five-day week and 18 on a six-day week, and which
 applies to Nopedi is the same open policy question as the rest of the leave
 rules — so entitlement stays rows somebody writes.
 
+### Roster
+
+Who is on which site, a week at a time, at **People → Roster**. Placements are
+date ranges rather than a row per day, because a fortnight on one site is one
+decision — the days inside it come from the person's work pattern, so a
+six-day week shows its Saturday and a rotation shows nothing in its off week.
+
+Every cell is one of four things and they are meant to be told apart without
+reading: placed, on leave, due in but unplaced, and not a working day at all.
+That last one is the reason the roster knows about patterns and holidays: a day
+somebody was never going to work must not look like a day nobody has got round
+to filling.
+
+Two clashes are refused — being in two places at once, and being placed across
+approved leave. Leave that is only requested is shown rather than refused,
+because the roster is often what decides whether that request gets approved.
+
 ### Public holidays
 
 Leave is never charged for a day the company is closed. The twelve statutory
