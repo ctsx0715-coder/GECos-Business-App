@@ -15,6 +15,7 @@ what is deliberately in and out of scope.
 | [`docs/00-architecture-decisions.md`](docs/00-architecture-decisions.md) | Decisions that are expensive to reverse, and why |
 | [`docs/01-demo-scope.md`](docs/01-demo-scope.md) | Skeleton scope, security staging, acceptance criteria |
 | [`docs/02-discovery-questions.md`](docs/02-discovery-questions.md) | What we still need from the client, ordered by cost of getting it wrong |
+| [`docs/03-tender-lifecycle-preview.md`](docs/03-tender-lifecycle-preview.md) | The full tender lifecycle, what is built, and the walkable preview of what is not |
 
 ## Stack
 
@@ -29,7 +30,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 116 tests against a real database
+pnpm test                   # 234 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -46,6 +47,7 @@ in `src/generated/prisma` and is not committed.
 | `pnpm lint` | ESLint |
 | `pnpm db:migrate` | Create and apply a migration |
 | `pnpm db:studio` | Browse the database |
+| `pnpm screenshots:lifecycle` | Drives the lifecycle preview and reporting screens, asserting on each |
 
 ## Architecture in one page
 

@@ -35,7 +35,12 @@ import { Breadcrumb, SidebarNav, type NavGroup } from "./nav";
  */
 export const dynamic = "force-dynamic";
 
-type GroupKey = "main" | "insights" | "support";
+/**
+ * The preview group is deliberately its own heading rather than a badge on a
+ * normal item. A demonstration screen that sits in the nav looking exactly
+ * like a built one is how a client ends up believing they bought it.
+ */
+type GroupKey = "main" | "insights" | "preview" | "support";
 
 interface NavItem {
   href: string;
@@ -114,6 +119,14 @@ const NAV: NavItem[] = [
     group: "main",
   },
   {
+    href: "/reports",
+    label: "Reports",
+    icon: "trend",
+    moduleKey: "reports",
+    permission: "reports.dashboard.view",
+    group: "insights",
+  },
+  {
     href: "/compliance",
     label: "Compliance",
     icon: "shield",
@@ -129,11 +142,20 @@ const NAV: NavItem[] = [
     permission: "core.audit.view",
     group: "support",
   },
+  {
+    href: "/preview",
+    label: "Tender lifecycle",
+    icon: "compass",
+    moduleKey: "tenders",
+    permission: "tenders.tender.view",
+    group: "preview",
+  },
 ];
 
 const GROUP_LABELS: Record<GroupKey, string> = {
   main: "Main navigation",
   insights: "Analytics & insights",
+  preview: "Not built yet",
   support: "Support",
 };
 
@@ -143,7 +165,7 @@ const GROUP_LABELS: Record<GroupKey, string> = {
  * disappears with them rather than becoming an empty disclosure.
  */
 function buildGroups(visible: NavItem[]): NavGroup[] {
-  return (["main", "insights", "support"] as GroupKey[])
+  return (["main", "insights", "preview", "support"] as GroupKey[])
     .map((key) => {
       const items: NavGroup["items"] = [];
 

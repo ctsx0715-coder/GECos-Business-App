@@ -23,6 +23,7 @@ export type IconName =
   | "chevronDown"
   | "chevronRight"
   | "clock"
+  | "compass"
   | "file"
   | "filter"
   | "folder"
@@ -99,6 +100,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <circle cx="12" cy="12" r="9" />
       <path d="M12 7v5l3 2" />
+    </>
+  ),
+  compass: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m15.5 8.5-2.2 4.8-4.8 2.2 2.2-4.8z" />
     </>
   ),
   file: (
