@@ -52,11 +52,19 @@ in `src/generated/prisma` and is not committed.
 | `pnpm screenshots:lifecycle` | Drives the lifecycle preview and reporting screens, asserting on each |
 
 `db:sync` runs automatically on every **production** deploy and is safe to
-repeat: it only adds, leaves a disabled module disabled, and never creates
-users. It is what makes a new module visible on a database that already exists
-— without it, the permission rows and role links a new module needs are only
-ever written when a tenant is first created, and the module is invisible to
-everyone, including a user holding every permission.
+repeat: it only adds, leaves an unimplemented module switched off, and never
+creates users. It is what makes a new module visible on a database that already
+exists — without it, the permission rows, role links and the module flag a new
+module needs are only ever written when a tenant is first created, and the
+module is invisible to everyone, including a user holding every permission.
+
+Switching an implemented module **on** is part of that. A tenant seeded before
+a module shipped already has a row for it saying off, so creating only the
+missing rows would leave the module hidden forever. Nothing can switch a module
+off today — there is no interface for it — so `false` on an implemented module
+means only "written before the module existed". The day a toggle is built, the
+tenant's choice has to be recorded on the row and `db:sync` taught to respect
+it.
 
 Preview deployments skip both migrations and the sync. They share the
 production database, so writing to it from a preview would change the schema

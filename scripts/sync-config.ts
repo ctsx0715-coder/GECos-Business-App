@@ -27,7 +27,8 @@ import { shouldTouchDatabase, skipMessage } from "./should-touch-database.mjs";
  * Three rules keep it from doing damage:
  *
  *   1. It only ever adds. A permission removed from the catalogue is left in
- *      the database, and a module a tenant switched off stays off.
+ *      the database, and a module the software does not implement is left
+ *      switched off.
  *   2. It touches system roles only. A role someone created themselves is
  *      theirs, and its permissions are not ours to rewrite.
  *   3. It never creates people. Users are not configuration.
@@ -58,6 +59,7 @@ async function main() {
     roles: 0,
     roleLinks: 0,
     moduleFlags: 0,
+    modulesEnabled: 0,
   };
 
   // 1. The permission catalogue is global and code-owned.
@@ -78,27 +80,60 @@ async function main() {
   });
 
   for (const organisation of organisations) {
-    // 2. Every module needs a row, but an existing one is left exactly as the
-    //    tenant set it — including switched off.
-    const existingModules = new Set(
+    /*
+     * 2. Every module needs a row, and every module the software implements is
+     *    switched on.
+     *
+     *    Creating the missing rows is not enough on its own. The seed writes a
+     *    row for every module in the catalogue when a tenant is created, and
+     *    writes `false` for the ones not built yet — so a tenant seeded before
+     *    HR shipped already has an `hr` row, saying off. Skipping rows that
+     *    exist leaves it off forever, and the module stays invisible however
+     *    many times this runs. That is the bug this script was written to fix,
+     *    surviving inside the script itself.
+     *
+     *    Turning it on here is safe because nothing can switch a module off:
+     *    the seed and this script are the only writers, and there is no
+     *    interface for it. When one is built, the tenant's choice has to be
+     *    recorded on the row — a `disabledAt`, or a flag saying a human set
+     *    this — and this step must then leave a deliberate off alone. Until
+     *    then, `false` on an implemented module means nothing but "written
+     *    before the module existed".
+     */
+    const moduleFlags = new Map(
       (
         await rawDb.organisationModule.findMany({
           where: { organisationId: organisation.id },
-          select: { moduleKey: true },
+          select: { moduleKey: true, isEnabled: true },
         })
-      ).map((row) => row.moduleKey),
+      ).map((row) => [row.moduleKey, row.isEnabled]),
     );
 
     for (const moduleKey of Object.values(MODULES)) {
-      if (existingModules.has(moduleKey)) continue;
-      await rawDb.organisationModule.create({
-        data: {
-          organisationId: organisation.id,
-          moduleKey,
-          isEnabled: IMPLEMENTED.has(moduleKey),
-        },
+      const isEnabled = moduleFlags.get(moduleKey);
+
+      if (isEnabled === undefined) {
+        await rawDb.organisationModule.create({
+          data: {
+            organisationId: organisation.id,
+            moduleKey,
+            isEnabled: IMPLEMENTED.has(moduleKey),
+          },
+        });
+        added.moduleFlags += 1;
+        continue;
+      }
+
+      // An unimplemented module stays off. An implemented one that is already
+      // on needs no write.
+      if (isEnabled || !IMPLEMENTED.has(moduleKey)) continue;
+
+      await rawDb.organisationModule.updateMany({
+        where: { organisationId: organisation.id, moduleKey },
+        data: { isEnabled: true },
       });
-      added.moduleFlags += 1;
+      added.modulesEnabled += 1;
+      console.log(`Enabled ${moduleKey} for ${organisation.name}.`);
     }
 
     // 3. System roles, and the permissions they are defined to hold.
