@@ -46,7 +46,15 @@ in `src/generated/prisma` and is not committed.
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm lint` | ESLint |
 | `pnpm db:migrate` | Create and apply a migration |
+| `pnpm db:sync` | Reconcile permissions, roles and module flags into an existing database |
+| `pnpm db:seed` | Build a demo dataset from nothing — **truncates every table first** |
 | `pnpm db:studio` | Browse the database |
+
+`db:sync` runs automatically on every deploy and is safe to repeat: it only
+adds, leaves a disabled module disabled, and never creates users. It is what
+makes a new module visible on a database that already exists — without it, the
+permission rows and module flag a new module needs are only ever written when a
+tenant is first created, and the module is invisible to everyone.
 | `pnpm screenshots:lifecycle` | Drives the lifecycle preview and reporting screens, asserting on each |
 
 ## Architecture in one page
