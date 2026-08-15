@@ -84,6 +84,24 @@ export const PERMISSIONS = {
   /// permission rather than part of editing a project.
   "projects.expense.approve": MODULES.PROJECTS,
 
+  // HR
+  "hr.employee.view": MODULES.HR,
+  "hr.employee.create": MODULES.HR,
+  "hr.employee.edit": MODULES.HR,
+  /// Exiting someone is separated from editing them: it ends their access,
+  /// closes their leave and starts a statutory retention clock.
+  "hr.employee.exit": MODULES.HR,
+  "hr.certification.view": MODULES.HR,
+  "hr.certification.manage": MODULES.HR,
+  /// Seeing everyone's leave. Seeing your own needs no permission — it is
+  /// your record, and requiring one would lock every employee out of it.
+  "hr.leave.view": MODULES.HR,
+  "hr.leave.request": MODULES.HR,
+  "hr.leave.approve": MODULES.HR,
+  /// Writing entitlements. Separate from approving, because someone who can
+  /// top up a balance and approve against it needs no approver at all.
+  "hr.leave.configure": MODULES.HR,
+
   // Documents
   "documents.document.view": MODULES.DOCUMENTS,
   "documents.document.upload": MODULES.DOCUMENTS,
@@ -191,6 +209,36 @@ export const SYSTEM_ROLES: Record<
       "documents.document.view",
       "documents.document.upload",
       "reports.dashboard.view",
+      // Approves leave for their own site team.
+      "hr.employee.view",
+      "hr.leave.view",
+      "hr.leave.request",
+      "hr.leave.approve",
+    ],
+  },
+  /**
+   * A dedicated HR role, because the alternative is giving whoever administers
+   * people the executive role, which also hands them every tender and every
+   * number in the business.
+   */
+  hr_manager: {
+    name: "HR Manager",
+    description: "Owns the people register, certifications and leave.",
+    permissions: [
+      "hr.employee.view",
+      "hr.employee.create",
+      "hr.employee.edit",
+      "hr.employee.exit",
+      "hr.certification.view",
+      "hr.certification.manage",
+      "hr.leave.view",
+      "hr.leave.request",
+      "hr.leave.approve",
+      "hr.leave.configure",
+      "core.users.view",
+      "documents.document.view",
+      "documents.document.upload",
+      "reports.dashboard.view",
     ],
   },
   employee: {
@@ -201,6 +249,8 @@ export const SYSTEM_ROLES: Record<
       "documents.document.view",
       "projects.task.view",
       "projects.expense.submit",
+      // Requesting leave is baseline. Seeing anyone else's is not.
+      "hr.leave.request",
     ],
   },
 };

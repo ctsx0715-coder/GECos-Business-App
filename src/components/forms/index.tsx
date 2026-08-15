@@ -2,6 +2,7 @@
 
 import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { Icon } from "@/components/ui/icons";
 
 /**
  * The shared form kit.
@@ -204,9 +205,12 @@ export function SelectField(props: {
 /** The banner for errors that belong to the form rather than one field. */
 export function FormMessage({ message }: { message: string | null }) {
   if (!message) return null;
+  // A sunk surface with a coloured icon, not a coloured panel: the theme keeps
+  // filled colour for data, and an error is not data.
   return (
-    <div className="rounded-lg bg-danger-soft px-4 py-3 text-sm font-medium text-danger">
-      {message}
+    <div className="mx-5 flex items-start gap-2 rounded-[10px] border border-border bg-surface-muted px-4 py-3 text-sm">
+      <Icon name="alert" className="mt-0.5 text-danger" />
+      <span className="font-medium text-danger">{message}</span>
     </div>
   );
 }

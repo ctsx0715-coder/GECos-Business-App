@@ -231,11 +231,19 @@ describe("approval and separation of duties", () => {
     );
     const approvalId = await pendingApprovalId(workflowInstance!.id);
 
-    await expect(
-      as("finance_manager", () =>
-        tenderService.decideApproval({ approvalId, decision: "APPROVED" }),
-      ),
-    ).rejects.toThrow(/cannot approve a tender you own/);
+    const attempt = as("finance_manager", () =>
+      tenderService.decideApproval({ approvalId, decision: "APPROVED" }),
+    );
+
+    await expect(attempt).rejects.toThrow(/cannot approve a tender you own/);
+
+    /*
+     * The class matters as much as the message. Server actions translate an
+     * AppError into a refusal the screen can render, and rethrow anything else
+     * to the error boundary. Downgrade this to a plain Error and the rule still
+     * holds — but the approver sees a crash page instead of being told why.
+     */
+    await expect(attempt).rejects.toBeInstanceOf(ForbiddenError);
   });
 
   it("advances through the chain and only approves at the end", async () => {

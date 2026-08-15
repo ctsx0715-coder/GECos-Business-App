@@ -52,6 +52,14 @@ type UnknownRecord = Record<string, unknown>;
 function toJsonValue(value: unknown): unknown {
   if (typeof value === "bigint") return value.toString();
   if (value instanceof Date) return value.toISOString();
+  /*
+   * Decimal before the generic object branch. A Decimal instance carries its
+   * own `constructor` property pointing at the class, so walking it with
+   * Object.entries puts a function into the audit row and the write fails.
+   * Kept as a string for the same reason BigInt is: a float would round the
+   * value the audit trail exists to preserve.
+   */
+  if (value instanceof Prisma.Decimal) return value.toString();
   if (Array.isArray(value)) return value.map(toJsonValue);
   if (value && typeof value === "object") {
     const out: UnknownRecord = {};
@@ -68,7 +76,14 @@ function scalarSnapshot(record: UnknownRecord): UnknownRecord {
   const out: UnknownRecord = {};
   for (const [key, value] of Object.entries(record)) {
     if (typeof value === "function") continue;
-    if (value !== null && typeof value === "object" && !(value instanceof Date)) {
+    // Dates and Decimals are scalar columns despite being objects. Skipping a
+    // Decimal would quietly drop the number of days from a leave audit row.
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      !(value instanceof Date) &&
+      !(value instanceof Prisma.Decimal)
+    ) {
       continue;
     }
     out[key] = toJsonValue(value);

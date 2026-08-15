@@ -49,6 +49,24 @@ export async function userHasPermission(
 }
 
 /**
+ * Whether the acting user holds `permission`, without throwing.
+ *
+ * For the cases where a permission widens what is returned rather than gating
+ * it — "your own record, or anyone's if you may see everyone" — where catching
+ * a thrown ForbiddenError to decide a branch would be control flow by
+ * exception. Gates still use requirePermission.
+ */
+export async function hasPermission(
+  permission: PermissionKey,
+): Promise<boolean> {
+  const context = getRequestContext();
+  if (!context) return false;
+  if (context.isSystem && context.userId === null) return true;
+  if (!context.userId) return false;
+  return userHasPermission(context.userId, permission);
+}
+
+/**
  * Asserts the acting user holds `permission`, or throws.
  *
  * Returns the acting user id so callers can use it without re-reading context.

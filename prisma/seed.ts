@@ -64,6 +64,7 @@ async function seedTenant(params: {
             MODULES.PROJECTS,
             MODULES.DOCUMENTS,
             MODULES.REPORTS,
+            MODULES.HR,
           ].includes(moduleKey as never),
         },
       });
@@ -177,6 +178,7 @@ async function main() {
       { roleKey: "project_manager", firstName: "Zanele", lastName: "Khoza", jobTitle: "Project Manager" },
       { roleKey: "tender_officer", firstName: "Sipho", lastName: "Ndlovu", jobTitle: "Tender Officer" },
       { roleKey: "employee", firstName: "Anele", lastName: "Dlamini", jobTitle: "Site Supervisor" },
+      { roleKey: "hr_manager", firstName: "Refilwe", lastName: "Molefe", jobTitle: "HR Manager" },
     ],
   });
 
@@ -762,6 +764,212 @@ async function main() {
         },
       });
     }
+
+    // ---- HR ----------------------------------------------------------------
+    // Leave entitlements here are the BCEA statutory minimums, which is what
+    // the law guarantees rather than what Nopedi necessarily grants. A
+    // bargaining council agreement or their own policy may be more generous,
+    // and finding out which is an open discovery question. They are seeded as
+    // rows precisely so correcting them is a data change.
+    const leaveTypes: Record<string, string> = {};
+    for (const type of [
+      {
+        code: "ANNUAL",
+        name: "Annual leave",
+        description: "BCEA minimum is 21 consecutive days, which is 15 working days.",
+        daysPerCycle: 15,
+        carryOverMaxDays: 5,
+        sortOrder: 1,
+      },
+      {
+        code: "SICK",
+        name: "Sick leave",
+        description:
+          "BCEA allows 30 days over a 36-month cycle. Seeded as the annual share.",
+        daysPerCycle: 10,
+        documentRequiredAfterDays: 2,
+        allowsBackdating: true,
+        sortOrder: 2,
+      },
+      {
+        code: "FAMILY",
+        name: "Family responsibility",
+        description: "BCEA minimum is 3 days a year.",
+        daysPerCycle: 3,
+        allowsBackdating: true,
+        sortOrder: 3,
+      },
+      {
+        code: "UNPAID",
+        name: "Unpaid leave",
+        description: "Uncapped, and approved case by case.",
+        daysPerCycle: null,
+        isPaid: false,
+        sortOrder: 4,
+      },
+    ]) {
+      const created = await db.leaveType.create({
+        data: {
+          organisationId: nopedi.organisation.id,
+          code: type.code,
+          name: type.name,
+          description: type.description,
+          daysPerCycle: type.daysPerCycle,
+          isPaid: type.isPaid ?? true,
+          carryOverMaxDays: type.carryOverMaxDays ?? null,
+          documentRequiredAfterDays: type.documentRequiredAfterDays ?? null,
+          allowsBackdating: type.allowsBackdating ?? false,
+          sortOrder: type.sortOrder,
+        },
+      });
+      leaveTypes[type.code] = created.id;
+    }
+
+    // Everyone with a login is also on the payroll, plus site staff who have
+    // no reason to ever sign in — which is the case the Employee/User split
+    // exists for.
+    const employeeSpecs: Array<{
+      firstName: string;
+      lastName: string;
+      jobTitle: string;
+      department: string;
+      roleKey?: keyof typeof SYSTEM_ROLES;
+      employmentType?: "PERMANENT" | "FIXED_TERM" | "TEMPORARY" | "CONTRACTOR" | "APPRENTICE";
+      startedDaysAgo: number;
+      /** Certifications, with how many days from now they expire. */
+      certifications?: Array<{ name: string; category: "TRAINING" | "MEDICAL" | "HSE" | "LICENCE"; expiresInDays: number }>;
+    }> = [
+      { firstName: "Thato", lastName: "Chokoe", jobTitle: "Managing Director", department: "Executive", roleKey: "executive", startedDaysAgo: 2900 },
+      { firstName: "Refilwe", lastName: "Molefe", jobTitle: "HR Manager", department: "Corporate services", roleKey: "hr_manager", startedDaysAgo: 1100 },
+      { firstName: "Lerato", lastName: "Mokoena", jobTitle: "Finance Manager", department: "Finance", roleKey: "finance_manager", startedDaysAgo: 1500 },
+      { firstName: "Zanele", lastName: "Khoza", jobTitle: "Project Manager", department: "Delivery", roleKey: "project_manager", startedDaysAgo: 980,
+        certifications: [
+          { name: "First aid level 2", category: "TRAINING", expiresInDays: 40 },
+          { name: "Construction Regulations 8(1) appointment", category: "HSE", expiresInDays: 400 },
+        ] },
+      { firstName: "Sipho", lastName: "Ndlovu", jobTitle: "Tender Officer", department: "Commercial", roleKey: "tender_officer", startedDaysAgo: 700 },
+      { firstName: "Bongani", lastName: "Sithole", jobTitle: "Sales Manager", department: "Commercial", roleKey: "sales_manager", startedDaysAgo: 640 },
+      { firstName: "Anele", lastName: "Dlamini", jobTitle: "Site Supervisor", department: "Delivery", roleKey: "employee", startedDaysAgo: 420,
+        certifications: [
+          { name: "Working at heights", category: "TRAINING", expiresInDays: -12 },
+          { name: "Medical certificate of fitness", category: "MEDICAL", expiresInDays: 25 },
+        ] },
+      // No login: the people the split exists for.
+      { firstName: "Jacob", lastName: "Mthembu", jobTitle: "Boilermaker", department: "Workshop", startedDaysAgo: 1600,
+        certifications: [
+          { name: "Trade test certificate", category: "TRAINING", expiresInDays: 3600 },
+          { name: "Welding coded qualification", category: "TRAINING", expiresInDays: 70 },
+        ] },
+      { firstName: "Pieter", lastName: "van Wyk", jobTitle: "Plant Operator", department: "Plant", startedDaysAgo: 300, employmentType: "FIXED_TERM",
+        certifications: [
+          { name: "Forklift licence", category: "LICENCE", expiresInDays: -3 },
+          { name: "Medical certificate of fitness", category: "MEDICAL", expiresInDays: 150 },
+        ] },
+      { firstName: "Nomsa", lastName: "Zulu", jobTitle: "Site Clerk", department: "Delivery", startedDaysAgo: 210, employmentType: "TEMPORARY" },
+      { firstName: "Katlego", lastName: "Sebego", jobTitle: "Apprentice Electrician", department: "Workshop", startedDaysAgo: 120, employmentType: "APPRENTICE",
+        certifications: [{ name: "Induction — site safety", category: "HSE", expiresInDays: 200 }] },
+    ];
+
+    const cycleStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
+    const cycleEnd = new Date(Date.UTC(new Date().getUTCFullYear(), 11, 31));
+    const employeeIds: Record<string, string> = {};
+    let employeeCounter = 0;
+
+    for (const spec of employeeSpecs) {
+      employeeCounter += 1;
+      const employee = await db.employee.create({
+        data: {
+          organisationId: nopedi.organisation.id,
+          employeeNumber: `EMP-${year}-${String(employeeCounter).padStart(4, "0")}`,
+          userId: spec.roleKey ? nopedi.userIds[spec.roleKey] : null,
+          firstName: spec.firstName,
+          lastName: spec.lastName,
+          email: spec.roleKey
+            ? `${spec.firstName.toLowerCase()}@nopedi.co.za`
+            : null,
+          jobTitle: spec.jobTitle,
+          department: spec.department,
+          employmentType: spec.employmentType ?? "PERMANENT",
+          startedAt: days(-spec.startedDaysAgo),
+        },
+      });
+      employeeIds[`${spec.firstName} ${spec.lastName}`] = employee.id;
+
+      // Annual and sick balances for the current cycle, part-used.
+      for (const [code, entitled, taken] of [
+        ["ANNUAL", 15, employeeCounter % 4 === 0 ? 9 : employeeCounter % 3],
+        ["SICK", 10, employeeCounter % 5 === 0 ? 4 : 0],
+        ["FAMILY", 3, 0],
+      ] as Array<[string, number, number]>) {
+        await db.leaveBalance.create({
+          data: {
+            organisationId: nopedi.organisation.id,
+            employeeId: employee.id,
+            leaveTypeId: leaveTypes[code],
+            cycleStartsAt: cycleStart,
+            cycleEndsAt: cycleEnd,
+            entitledDays: entitled,
+            takenDays: taken,
+          },
+        });
+      }
+
+      for (const cert of spec.certifications ?? []) {
+        await db.complianceItem.create({
+          data: {
+            organisationId: nopedi.organisation.id,
+            category: cert.category,
+            entityType: "EMPLOYEE",
+            entityId: employee.id,
+            requirementName: cert.name,
+            issuedAt: days(cert.expiresInDays - 730),
+            expiresAt: days(cert.expiresInDays),
+          },
+        });
+      }
+    }
+
+    // Two live requests so the approvals queue is not empty, and one already
+    // decided so the history has something in it.
+    // The day counts are stated rather than derived: the seed writes rows
+    // directly, and a count that disagrees with its own date range is exactly
+    // the inconsistency the register exists to surface.
+    const pendingLeave: Array<[string, string, number, number, number, string]> = [
+      ["Anele Dlamini", "ANNUAL", 12, 16, 3, "Family function in Polokwane."],
+      ["Jacob Mthembu", "SICK", -2, -1, 2, "Flu. Medical certificate to follow."],
+    ];
+    let leaveCounter = 0;
+    for (const [who, code, startIn, endIn, dayCount, reason] of pendingLeave) {
+      leaveCounter += 1;
+      await db.leaveRequest.create({
+        data: {
+          organisationId: nopedi.organisation.id,
+          reference: `LV-${year}-${String(leaveCounter).padStart(4, "0")}`,
+          employeeId: employeeIds[who],
+          leaveTypeId: leaveTypes[code],
+          startsAt: days(startIn),
+          endsAt: days(endIn),
+          days: dayCount,
+          reason,
+        },
+      });
+    }
+
+    leaveCounter += 1;
+    await db.leaveRequest.create({
+      data: {
+        organisationId: nopedi.organisation.id,
+        reference: `LV-${year}-${String(leaveCounter).padStart(4, "0")}`,
+        employeeId: employeeIds["Zanele Khoza"],
+        leaveTypeId: leaveTypes.ANNUAL,
+        startsAt: days(-40),
+        endsAt: days(-36),
+        days: 5,
+        status: "APPROVED",
+        decidedById: nopedi.userIds.hr_manager,
+        decidedAt: days(-48),
+      },
+    });
   });
 
   console.log("Seeding a second tenant, to prove isolation…");

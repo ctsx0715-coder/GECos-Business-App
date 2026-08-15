@@ -271,6 +271,17 @@ describe("budget and expenses", () => {
         }),
       ),
     ).rejects.toThrow(/cannot approve your own expense/);
+
+    // Same reasoning as the tender rule: an AppError is a refusal the screen
+    // renders, anything else is a crash page.
+    await expect(
+      as("project_manager", () =>
+        projectService.decideExpense({
+          expenseId: expense.id,
+          decision: "APPROVED",
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
   });
 
   it("refuses to decide the same expense twice", async () => {

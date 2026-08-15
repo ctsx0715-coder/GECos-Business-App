@@ -150,6 +150,30 @@ enum ProjectRole {
 }
 
 /// Categories for the shared expiry engine (ADR-004). One engine, many uses.
+/// How someone is engaged. Drives which leave and notice rules apply, which is
+/// why it is on the employee rather than inferred from a contract document.
+enum EmploymentType {
+  PERMANENT
+  FIXED_TERM
+  TEMPORARY
+  CONTRACTOR
+  APPRENTICE
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  SUSPENDED
+  EXITED
+}
+
+enum LeaveRequestStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
 enum ComplianceCategory {
   TRAINING
   MEDICAL
@@ -258,6 +282,10 @@ model Organisation {
   notifications    Notification[]
   auditLogs        AuditLog[]
   sequences        ReferenceSequence[]
+  employees        Employee[]
+  leaveTypes       LeaveType[]
+  leaveBalances    LeaveBalance[]
+  leaveRequests    LeaveRequest[]
 
   @@map("organisations")
 }
@@ -324,6 +352,8 @@ model User {
   assignedTasks      ProjectTask[]        @relation("TaskAssignee")
   submittedExpenses  ProjectExpense[]     @relation("ExpenseSubmitter")
   approvedExpenses   ProjectExpense[]     @relation("ExpenseApprover")
+  employeeRecord     Employee?
+  decidedLeave       LeaveRequest[]       @relation("LeaveDecider")
 
   @@unique([organisationId, email])
   @@index([organisationId])
@@ -1175,4 +1205,191 @@ model AuditLog {
   @@index([organisationId, entityType, entityId])
   @@index([actorUserId])
   @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// HR — people, certifications and leave
+// ---------------------------------------------------------------------------
+
+/// A person the organisation employs.
+///
+/// Deliberately not the same record as `User`. A user is someone who can sign
+/// in; an employee is someone on the payroll. Most site staff are employees
+/// with no login, and an external auditor may be a user who is not an
+/// employee. Collapsing the two is the mistake that later forces either fake
+/// logins for people who will never use the system, or employee data hanging
+/// off accounts that get deactivated.
+model Employee {
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  /// EMP-2026-0001. Generated, so nobody has to invent a numbering scheme.
+  employeeNumber String
+  /// Present only when this person also has a login.
+  userId         String? @db.Uuid
+
+  firstName String
+  lastName  String
+  email     String?
+  phone     String?
+
+  /// South African ID or passport. Stored because leave, HSE and statutory
+  /// reporting all key off it. POPIA applies: see docs/02-discovery-questions.
+  nationalId String?
+
+  jobTitle   String?
+  department String?
+  /// Who they report to, as an employee. Separate from User.managerId, which
+  /// is about system hierarchy and may differ for contractors.
+  managerId  String? @db.Uuid
+
+  employmentType EmploymentType @default(PERMANENT)
+  status         EmployeeStatus @default(ACTIVE)
+  startedAt      DateTime       @db.Timestamptz(6)
+  /// Set on exit. The record is never deleted — statutory retention applies.
+  endedAt        DateTime?      @db.Timestamptz(6)
+  exitReason     String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  manager      Employee?    @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports      Employee[]   @relation("EmployeeManager")
+
+  leaveBalances LeaveBalance[]
+  leaveRequests LeaveRequest[]
+
+  @@unique([organisationId, employeeNumber])
+  @@unique([userId])
+  @@index([organisationId])
+  @@index([organisationId, status])
+  @@index([managerId])
+  @@map("employees")
+}
+
+/// A kind of leave, and the entitlement that comes with it.
+///
+/// This is configuration rather than code on purpose. South African leave is
+/// set by the BCEA as a floor, then raised by a bargaining council agreement
+/// or company policy, and we do not yet know which apply to Nopedi
+/// (docs/02-discovery-questions.md). Encoding the rules as rows means the
+/// answer changes data, not the data model.
+model LeaveType {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  code           String
+  name           String
+  description    String?
+
+  /// Entitlement per cycle. Null means uncapped — unpaid leave, typically.
+  daysPerCycle Decimal? @db.Decimal(6, 2)
+  isPaid       Boolean  @default(true)
+  /// Days that may be carried into the next cycle. Null means none.
+  carryOverMaxDays Decimal? @db.Decimal(6, 2)
+  /// Sick leave over two consecutive days needs a medical certificate under
+  /// the BCEA. Expressed as a threshold so a stricter policy is a row edit.
+  documentRequiredAfterDays Int?
+  /// Whether a request may be backdated. Sick leave usually is; annual is not.
+  allowsBackdating Boolean @default(false)
+
+  sortOrder Int @default(0)
+  isActive  Boolean @default(true)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  balances LeaveBalance[]
+  requests LeaveRequest[]
+
+  @@unique([organisationId, code])
+  @@index([organisationId])
+  @@map("leave_types")
+}
+
+/// What one employee is entitled to, and has taken, in one cycle.
+///
+/// A ledger, not an accrual engine. How entitlement is topped up — monthly
+/// accrual, annual grant, the BCEA's 36-month sick cycle — depends on answers
+/// we do not have, so the balance is written to rather than computed. When the
+/// rules arrive they populate this table; nothing that reads it has to change.
+model LeaveBalance {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  employeeId     String @db.Uuid
+  leaveTypeId    String @db.Uuid
+
+  cycleStartsAt DateTime @db.Timestamptz(6)
+  cycleEndsAt   DateTime @db.Timestamptz(6)
+
+  entitledDays  Decimal @default(0) @db.Decimal(6, 2)
+  /// Carried in from the previous cycle, kept separate so it can be reported.
+  broughtForwardDays Decimal @default(0) @db.Decimal(6, 2)
+  /// Approved and taken. Pending requests are not counted here — they are
+  /// counted at request time, so two overlapping requests cannot both fit.
+  takenDays     Decimal @default(0) @db.Decimal(6, 2)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType    LeaveType    @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+
+  /// organisationId leads the key so the tenancy extension can pin an
+  /// upsert to one tenant. Without it the guard refuses the write, which
+  /// is the extension doing its job rather than being awkward.
+  @@unique([organisationId, employeeId, leaveTypeId, cycleStartsAt])
+  @@index([organisationId])
+  @@index([organisationId, employeeId])
+  @@map("leave_balances")
+}
+
+/// A request to be away, and its decision.
+model LeaveRequest {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  reference      String
+  employeeId     String @db.Uuid
+  leaveTypeId    String @db.Uuid
+
+  startsAt DateTime @db.Timestamptz(6)
+  endsAt   DateTime @db.Timestamptz(6)
+  /// Working days, computed on submission and stored. Recomputing it later
+  /// would silently rewrite history when the working-day rules change.
+  days     Decimal  @db.Decimal(6, 2)
+  reason   String?
+
+  status           LeaveRequestStatus @default(SUBMITTED)
+  decidedById      String?            @db.Uuid
+  decidedAt        DateTime?          @db.Timestamptz(6)
+  decisionComment  String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType    LeaveType    @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  decidedBy    User?        @relation("LeaveDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([organisationId, status])
+  @@index([employeeId, startsAt])
+  @@map("leave_requests")
 }

@@ -55,6 +55,7 @@ interface NavItem {
 
 const CUSTOMERS = { label: "Customers & sales", icon: "users" as const };
 const TENDERS = { label: "Tenders", icon: "file" as const };
+const PEOPLE = { label: "People", icon: "userPlus" as const };
 
 const NAV: NavItem[] = [
   {
@@ -117,6 +118,24 @@ const NAV: NavItem[] = [
     moduleKey: "projects",
     permission: "projects.project.view",
     group: "main",
+  },
+  {
+    href: "/hr/employees",
+    label: "Register",
+    icon: "users",
+    moduleKey: "hr",
+    permission: "hr.employee.view",
+    group: "main",
+    parent: PEOPLE,
+  },
+  {
+    href: "/hr/leave",
+    label: "Leave",
+    icon: "calendar",
+    moduleKey: "hr",
+    permission: "hr.leave.view",
+    group: "main",
+    parent: PEOPLE,
   },
   {
     href: "/reports",
