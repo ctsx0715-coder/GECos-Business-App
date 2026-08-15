@@ -5,10 +5,17 @@ import { getSession, demoAuthEnabled, DEV_USER_COOKIE } from "@/lib/auth/session
 import { withRequestContext } from "@/lib/database/tenant-context";
 import { db } from "@/lib/database/client";
 import { initials } from "@/lib/format";
+import { Icon } from "@/components/ui/icons";
+import type { IconName } from "@/components/ui/icons";
 import type { PermissionKey } from "@/lib/permissions";
+import { Breadcrumb, SidebarNav, type NavGroup } from "./nav";
 
 /**
  * The signed-in shell.
+ *
+ * The application does not fill the viewport: it sits as one rounded surface
+ * floating on a warm canvas, with the sidebar, the breadcrumb bar and the
+ * content region inside it.
  *
  * Navigation is filtered by two things: whether the tenant has the module
  * enabled (ADR-009) and whether the user holds the permission to see it. The
@@ -28,69 +35,143 @@ import type { PermissionKey } from "@/lib/permissions";
  */
 export const dynamic = "force-dynamic";
 
+type GroupKey = "main" | "insights" | "support";
+
 interface NavItem {
   href: string;
   label: string;
+  icon: IconName;
   moduleKey: string;
   permission: PermissionKey;
+  group: GroupKey;
+  /** Items sharing a parent are nested under it with tree connectors. */
+  parent?: { label: string; icon: IconName };
 }
+
+const CUSTOMERS = { label: "Customers & sales", icon: "users" as const };
+const TENDERS = { label: "Tenders", icon: "file" as const };
 
 const NAV: NavItem[] = [
   {
     href: "/dashboard",
     label: "Dashboard",
+    icon: "grid",
     moduleKey: "reports",
     permission: "reports.dashboard.view",
+    group: "main",
   },
   {
     href: "/crm/pipeline",
     label: "Pipeline",
+    icon: "target",
     moduleKey: "crm",
     permission: "crm.opportunity.view",
+    group: "main",
+    parent: CUSTOMERS,
   },
   {
     href: "/crm/leads",
     label: "Leads",
+    icon: "userPlus",
     moduleKey: "crm",
     permission: "crm.lead.view",
+    group: "main",
+    parent: CUSTOMERS,
   },
   {
     href: "/crm/customers",
     label: "Customers",
+    icon: "building",
     moduleKey: "crm",
     permission: "crm.customer.view",
+    group: "main",
+    parent: CUSTOMERS,
   },
   {
     href: "/tenders",
-    label: "Tenders",
+    label: "Register",
+    icon: "file",
     moduleKey: "tenders",
     permission: "tenders.tender.view",
+    group: "main",
+    parent: TENDERS,
   },
   {
     href: "/approvals",
     label: "Approvals",
+    icon: "inbox",
     moduleKey: "tenders",
     permission: "tenders.tender.approve",
+    group: "main",
+    parent: TENDERS,
   },
   {
     href: "/projects",
     label: "Projects",
+    icon: "folder",
     moduleKey: "projects",
     permission: "projects.project.view",
+    group: "main",
   },
   {
     href: "/compliance",
     label: "Compliance",
+    icon: "shield",
     moduleKey: "core",
     permission: "reports.dashboard.view",
+    group: "insights",
   },
   {
     href: "/audit",
     label: "Audit trail",
+    icon: "history",
     moduleKey: "core",
     permission: "core.audit.view",
+    group: "support",
   },
 ];
+
+const GROUP_LABELS: Record<GroupKey, string> = {
+  main: "Main navigation",
+  insights: "Analytics & insights",
+  support: "Support",
+};
+
+/**
+ * Folds the flat list into groups, collapsing runs of items that share a
+ * parent into one branch. A parent whose children were all filtered away
+ * disappears with them rather than becoming an empty disclosure.
+ */
+function buildGroups(visible: NavItem[]): NavGroup[] {
+  return (["main", "insights", "support"] as GroupKey[])
+    .map((key) => {
+      const items: NavGroup["items"] = [];
+
+      for (const item of visible.filter((i) => i.group === key)) {
+        if (!item.parent) {
+          items.push({ href: item.href, label: item.label, icon: item.icon });
+          continue;
+        }
+
+        const existing = items.find((i) => i.label === item.parent!.label);
+        const child = { href: item.href, label: item.label, icon: item.icon };
+
+        if (existing?.children) {
+          existing.children.push(child);
+        } else {
+          items.push({
+            href: item.href,
+            label: item.parent.label,
+            icon: item.parent.icon,
+            children: [child],
+          });
+        }
+      }
+
+      return { label: GROUP_LABELS[key], items };
+    })
+    .filter((group) => group.items.length > 0);
+}
 
 export default async function AppLayout({
   children,
@@ -120,10 +201,12 @@ export default async function AppLayout({
       }),
   );
 
-  const visible = NAV.filter(
-    (item) =>
-      enabledModules.has(item.moduleKey) &&
-      session.permissions.has(item.permission),
+  const groups = buildGroups(
+    NAV.filter(
+      (item) =>
+        enabledModules.has(item.moduleKey) &&
+        session.permissions.has(item.permission),
+    ),
   );
 
   async function signOut() {
@@ -134,62 +217,81 @@ export default async function AppLayout({
   }
 
   return (
-    <div className="min-h-dvh">
-      {demoAuthEnabled() && (
-        <p className="bg-warning-soft px-6 py-1.5 text-center text-xs text-warning">
-          <strong className="font-semibold">Demo sign-in is enabled.</strong>{" "}
-          Anyone who can reach this deployment can sign in as any user. Not for
-          real data.
-        </p>
-      )}
-      <header className="sticky top-0 z-10 border-b border-border bg-surface/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center gap-6 px-6 py-3">
-          <Link href="/dashboard" className="shrink-0">
-            <span className="block text-xs font-semibold uppercase tracking-widest text-accent">
-              Nopedi
+    <div className="min-h-dvh p-3 sm:p-5">
+      <div className="mx-auto grid max-w-[1400px] grid-cols-1 overflow-hidden rounded-[24px] bg-surface shadow-[0_8px_32px_rgba(0,0,0,0.06)] lg:grid-cols-[260px_minmax(0,1fr)]">
+        <aside className="flex flex-col gap-5 border-b border-border p-4 lg:border-b-0 lg:border-r">
+          <Link
+            href="/dashboard"
+            className="flex items-center gap-2.5 rounded-lg px-1 py-1"
+          >
+            <span className="grid size-8 place-items-center rounded-[10px] bg-accent text-sm font-semibold text-accent-foreground">
+              N
             </span>
-            <span className="block text-[11px] text-muted">
-              {organisation?.name}
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold leading-tight tracking-[-0.01em]">
+                Nopedi
+              </span>
+              <span className="block truncate text-[11px] leading-tight text-faint">
+                {organisation?.name}
+              </span>
             </span>
           </Link>
 
-          <nav className="flex flex-1 flex-wrap items-center gap-1">
-            {visible.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="rounded-lg px-3 py-1.5 text-sm text-muted transition hover:bg-surface-muted hover:text-foreground"
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
+          <SidebarNav groups={groups} />
 
-          <div className="flex items-center gap-3">
-            <div className="hidden text-right sm:block">
-              <p className="text-xs font-medium leading-tight">
-                {session.fullName}
-              </p>
-              <p className="text-[11px] leading-tight text-muted">
-                {session.jobTitle}
-              </p>
-            </div>
-            <span className="flex size-8 items-center justify-center rounded-full bg-accent-soft text-[11px] font-semibold text-accent">
+          <div className="flex items-center gap-2.5 rounded-[10px] border border-border bg-surface-muted p-2">
+            <span className="relative grid size-8 shrink-0 place-items-center rounded-full bg-accent text-[11px] font-semibold text-accent-foreground">
               {initials(session.fullName)}
+              <span className="absolute -bottom-px -right-px size-[9px] rounded-full border-2 border-surface-muted bg-success" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-medium leading-tight">
+                {session.fullName}
+              </span>
+              <span className="block truncate text-[11px] leading-tight text-faint">
+                {session.jobTitle}
+              </span>
             </span>
             <form action={signOut}>
               <button
                 type="submit"
-                className="rounded-lg border border-border px-2.5 py-1 text-xs text-muted transition hover:bg-surface-muted hover:text-foreground"
+                title="Switch user"
+                aria-label="Switch user"
+                className="grid size-8 place-items-center rounded-lg text-faint transition-colors hover:bg-surface hover:text-foreground"
               >
-                Switch
+                <Icon name="logOut" />
               </button>
             </form>
           </div>
-        </div>
-      </header>
+        </aside>
 
-      <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>
+        <div className="flex min-w-0 flex-col">
+          <div className="flex h-14 items-center gap-3 border-b border-border px-5">
+            <Breadcrumb
+              organisation={organisation?.name ?? "Nopedi"}
+              groups={groups}
+            />
+            <span className="ml-auto hidden text-[13px] text-faint sm:block">
+              {session.roleNames.join(" · ")}
+            </span>
+          </div>
+
+          {demoAuthEnabled() && (
+            <p className="flex items-center gap-2 border-b border-border bg-surface-muted px-5 py-2 text-xs text-muted">
+              <Icon name="alert" className="text-warning" />
+              <span>
+                <strong className="font-semibold text-foreground">
+                  Demo sign-in is enabled.
+                </strong>{" "}
+                Anyone who can reach this deployment can sign in as any user.
+                Not for real data.
+              </span>
+            </p>
+          )}
+
+          <main className="px-5 py-6 sm:px-6 sm:py-8">{children}</main>
+        </div>
+      </div>
     </div>
   );
 }

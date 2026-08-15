@@ -1,54 +1,92 @@
 @import "tailwindcss";
 
 /*
+ * Quiet Console.
+ *
+ * Monochrome first: the interface is black, white and warm gray, and colour
+ * appears only where it carries data meaning — a delta, a status, a priority,
+ * a threshold. If a colour is not encoding information it does not belong.
+ *
  * Palette is defined once on :root and only the values change for dark mode,
  * so a component never needs to know which theme it is in.
  */
 :root {
-  --background: #f6f7f9;
+  /* The canvas sits behind the app shell and is never a card. */
+  --canvas: #ededea;
+  --background: #ededea;
   --surface: #ffffff;
-  --surface-muted: #f1f3f5;
-  --border: #e2e5ea;
-  --foreground: #14161a;
-  --muted: #646b78;
-  --accent: #1f5f4e;
-  --accent-soft: #e6f1ee;
+  --surface-muted: #fafaf9;
+  --border: #e7e7e4;
+  --border-strong: #d6d6d2;
+  --foreground: #101010;
+  --muted: #6b6b68;
+  --faint: #9c9c98;
+
+  /* Near-black, not a hue: primary buttons, active bars, filled pills. */
+  --accent: #1e293b;
   --accent-foreground: #ffffff;
-  --danger: #b3261e;
-  --danger-soft: #fdecea;
-  --warning: #8a5a00;
-  --warning-soft: #fdf3e2;
-  --success: #1c6b3f;
-  --success-soft: #e8f4ec;
+  --accent-soft: #f1f1ef;
+
+  /* Semantic. Chips, glyphs and icons only — never a card background. */
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.1);
+  --warning: #d97706;
+  --warning-soft: rgba(217, 119, 6, 0.1);
+  --success: #16a34a;
+  --success-soft: rgba(22, 163, 74, 0.1);
+  --info: #2563eb;
+  --info-soft: rgba(37, 99, 235, 0.1);
+  --neutral: #78716c;
+  --neutral-soft: rgba(120, 113, 108, 0.1);
 }
 
+/*
+ * Dark mode inverts depth rather than tinting it: in light mode cards are
+ * lighter than the canvas, in dark mode they are darker than it.
+ */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0d0f12;
-    --surface: #15181d;
-    --surface-muted: #1b1f26;
-    --border: #272c34;
-    --foreground: #e8eaed;
-    --muted: #98a0ad;
-    --accent: #4db396;
-    --accent-soft: #16302a;
-    --accent-foreground: #06120e;
-    --danger: #f2857c;
-    --danger-soft: #2e1614;
-    --warning: #e0a94a;
-    --warning-soft: #2b2110;
-    --success: #6cc48d;
-    --success-soft: #13291c;
+    --canvas: #232323;
+    --background: #232323;
+    --surface: #0e0e0e;
+    --surface-muted: #171717;
+    --border: #262626;
+    --border-strong: #383838;
+    --foreground: #fafafa;
+    --muted: #a1a1a0;
+    --faint: #6e6e6c;
+
+    --accent: #ffffff;
+    --accent-foreground: #0e0e0e;
+    --accent-soft: #1f1f1f;
+
+    /*
+     * Lifted off the light-theme values deliberately. #16a34a on #0e0e0e is
+     * about 3.6:1, which fails the 4.5:1 floor these tokens are held to.
+     */
+    --danger: #f87171;
+    --danger-soft: rgba(248, 113, 113, 0.12);
+    --warning: #fbbf24;
+    --warning-soft: rgba(251, 191, 36, 0.12);
+    --success: #4ade80;
+    --success-soft: rgba(74, 222, 128, 0.12);
+    --info: #7aa5fb;
+    --info-soft: rgba(122, 165, 251, 0.12);
+    --neutral: #a8a29e;
+    --neutral-soft: rgba(168, 162, 158, 0.12);
   }
 }
 
 @theme inline {
+  --color-canvas: var(--canvas);
   --color-background: var(--background);
   --color-surface: var(--surface);
   --color-surface-muted: var(--surface-muted);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
+  --color-faint: var(--faint);
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
   --color-accent-foreground: var(--accent-foreground);
@@ -58,10 +96,14 @@
   --color-warning-soft: var(--warning-soft);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-neutral: var(--neutral);
+  --color-neutral-soft: var(--neutral-soft);
 }
 
 body {
-  background: var(--background);
+  background: var(--canvas);
   color: var(--foreground);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
@@ -71,4 +113,22 @@ body {
 /* Tabular figures keep money columns aligned down the page. */
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Every interactive element keeps a visible focus ring. Stated once here so
+ * no component has to remember, and so none can quietly remove it.
+ */
+:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
