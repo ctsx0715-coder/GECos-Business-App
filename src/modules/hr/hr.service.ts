@@ -10,6 +10,7 @@ import {
   certificationSchema,
   createEmployeeSchema,
   createLeaveTypeSchema,
+  createShiftSchema,
   createWorkPatternSchema,
   decideLeaveSchema,
   exitEmployeeSchema,
@@ -21,6 +22,7 @@ import {
   setBalanceSchema,
   updateEmployeeSchema,
   updateLeaveTypeSchema,
+  updateShiftSchema,
   updateWorkPatternSchema,
 } from "@/schemas/hr.schema";
 import type { EmployeeStatus, LeaveRequestStatus } from "@/generated/prisma/client";
@@ -32,6 +34,7 @@ import {
   previousCycle,
 } from "./leave-accrual";
 import { isoDate, statutoryHolidays } from "./public-holidays";
+import { spanMinutes } from "./shifts";
 import {
   DEFAULT_PATTERN,
   PATTERN_ANCHOR,
@@ -632,6 +635,57 @@ export const hrService = {
     });
   },
 
+  // -- Shifts ---------------------------------------------------------------
+
+  async listShifts(includeInactive = false) {
+    return hrRepository.listShifts(includeInactive);
+  },
+
+  async createShift(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const data = createShiftSchema.parse(input);
+
+    const clash = await hrRepository.findShiftByCode(data.code);
+    if (clash) {
+      throw new BusinessRuleError(
+        `${data.code} is already in use by ${clash.name}.`,
+      );
+    }
+
+    /*
+     * A break longer than the shift would make it worth negative hours. The
+     * arithmetic clamps at zero, but a shift configured that way is a typo
+     * rather than a policy, and refusing it is how the typo gets noticed.
+     */
+    if (data.breakMinutes >= spanMinutes(data)) {
+      throw new BusinessRuleError("The break is longer than the shift.");
+    }
+
+    return hrRepository.createShift({
+      code: data.code,
+      name: data.name,
+      description: data.description,
+      startsAtMinutes: data.startsAtMinutes,
+      endsAtMinutes: data.endsAtMinutes,
+      breakMinutes: data.breakMinutes,
+      sortOrder: data.sortOrder,
+    });
+  },
+
+  async updateShift(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const { shiftId, ...changes } = updateShiftSchema.parse(input);
+
+    const shift = await hrRepository.findShift(shiftId);
+    if (!shift) throw new NotFoundError("Shift");
+
+    if (changes.breakMinutes >= spanMinutes(changes)) {
+      throw new BusinessRuleError("The break is longer than the shift.");
+    }
+
+    return hrRepository.updateShift(shiftId, changes);
+  },
+
   // -- Work patterns --------------------------------------------------------
 
   async listWorkPatterns(includeInactive = false) {
@@ -686,6 +740,7 @@ export const hrService = {
       workingDayIndexes: unique(data.workingDayIndexes),
       anchorOn: PATTERN_ANCHOR,
       hoursPerDay: data.hoursPerDay,
+      shiftId: data.shiftId ?? null,
       isDefault: data.isDefault,
     });
 

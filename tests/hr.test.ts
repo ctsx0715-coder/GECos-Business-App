@@ -1235,3 +1235,81 @@ describe("the roster", () => {
     ).toHaveLength(0);
   });
 });
+
+describe("shifts", () => {
+  it("are created and attached to a pattern", async () => {
+    const shift = await as("hr_manager", () =>
+      hrService.createShift({
+        code: "NIGHT",
+        name: "Night shift",
+        startsAtMinutes: 18 * 60,
+        endsAtMinutes: 6 * 60,
+        breakMinutes: 60,
+      }),
+    );
+
+    const pattern = await as("hr_manager", () =>
+      hrService.createWorkPattern({
+        code: "ROTATION",
+        name: "Rotation",
+        cycleDays: 21,
+        workingDayIndexes: Array.from({ length: 14 }, (_, index) => index),
+        shiftId: shift.id,
+      }),
+    );
+
+    const patterns = await as("hr_manager", () => hrService.listWorkPatterns());
+    expect(patterns.find((row) => row.id === pattern.id)?.shift?.code).toBe("NIGHT");
+  });
+
+  it("refuse a break longer than the shift", async () => {
+    await expect(
+      as("hr_manager", () =>
+        hrService.createShift({
+          code: "SHORT",
+          name: "Short",
+          startsAtMinutes: 7 * 60,
+          endsAtMinutes: 8 * 60,
+          breakMinutes: 90,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(BusinessRuleError);
+  });
+
+  it("refuse a duplicate code", async () => {
+    await as("hr_manager", () =>
+      hrService.createShift({
+        code: "DAY",
+        name: "Day shift",
+        startsAtMinutes: 7 * 60,
+        endsAtMinutes: 16 * 60,
+        breakMinutes: 60,
+      }),
+    );
+
+    await expect(
+      as("hr_manager", () =>
+        hrService.createShift({
+          code: "DAY",
+          name: "Days",
+          startsAtMinutes: 6 * 60,
+          endsAtMinutes: 15 * 60,
+          breakMinutes: 60,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(BusinessRuleError);
+  });
+
+  it("are not something an ordinary employee may configure", async () => {
+    await expect(
+      as("employee", () =>
+        hrService.createShift({
+          code: "LATE_START",
+          name: "A later start",
+          startsAtMinutes: 10 * 60,
+          endsAtMinutes: 15 * 60,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});

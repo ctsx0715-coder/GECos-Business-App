@@ -335,6 +335,57 @@ function days(offset: number): Date {
 }
 
 /**
+ * The shifts the sites run.
+ *
+ * Minutes from midnight, so the night shift is expressible: 18:00 to 06:00 is
+ * an ordinary shift that happens to end the following morning.
+ */
+export const SHIFTS: Array<{
+  code: string;
+  name: string;
+  description: string;
+  startsAtMinutes: number;
+  endsAtMinutes: number;
+  breakMinutes: number;
+  sortOrder: number;
+}> = [
+  {
+    code: "DAY",
+    name: "Day shift",
+    description: "07:00 to 16:00 with an hour for lunch. The ordinary site day.",
+    startsAtMinutes: 7 * 60,
+    endsAtMinutes: 16 * 60,
+    breakMinutes: 60,
+    sortOrder: 1,
+  },
+  {
+    code: "NIGHT",
+    name: "Night shift",
+    description:
+      "18:00 to 06:00, ending the following morning. Worked on the rotation, where the plant runs through the night.",
+    startsAtMinutes: 18 * 60,
+    endsAtMinutes: 6 * 60,
+    breakMinutes: 60,
+    sortOrder: 2,
+  },
+  {
+    code: "SAT_HALF",
+    name: "Saturday half-day",
+    description: "07:00 to 13:00, no break. The six-day week's short day.",
+    startsAtMinutes: 7 * 60,
+    endsAtMinutes: 13 * 60,
+    breakMinutes: 0,
+    sortOrder: 3,
+  },
+];
+
+/** Which shift each pattern is worked on. */
+const SHIFT_BY_PATTERN: Record<string, string> = {
+  SITE_6DAY: "DAY",
+  ROTATION_14_7: "NIGHT",
+};
+
+/**
  * How Nopedi's people work.
  *
  * The office keeps an ordinary week; the sites work six days, which is the
@@ -411,6 +462,7 @@ const ROSTER: Array<{
 ];
 
 export interface HrDemoSummary {
+  shifts: number;
   workPatterns: number;
   leaveTypes: number;
   publicHolidays: number;
@@ -454,6 +506,7 @@ export async function seedHrDemo(params: {
 }): Promise<HrDemoSummary> {
   const { organisationId, userIds } = params;
   const summary: HrDemoSummary = {
+    shifts: 0,
     workPatterns: 0,
     leaveTypes: 0,
     publicHolidays: 0,
@@ -464,12 +517,40 @@ export async function seedHrDemo(params: {
     leaveRequests: 0,
   };
 
+  // ---- Shifts -------------------------------------------------------------
+  const shiftIds: Record<string, string> = {};
+  for (const spec of SHIFTS) {
+    const existing = await db.shift.findFirst({ where: { code: spec.code } });
+    if (existing) {
+      shiftIds[spec.code] = existing.id;
+      continue;
+    }
+
+    const created = await db.shift.create({
+      data: { organisationId, ...spec },
+    });
+    shiftIds[spec.code] = created.id;
+    summary.shifts += 1;
+  }
+
   // ---- Work patterns ------------------------------------------------------
   const patternIds: Record<string, string> = {};
   for (const spec of WORK_PATTERNS) {
     const existing = await db.workPattern.findFirst({ where: { code: spec.code } });
     if (existing) {
       patternIds[spec.code] = existing.id;
+      /*
+       * A pattern created before shifts existed. Attaching the shift it is
+       * actually worked on is the same one-field correction the employee loop
+       * makes: the pattern is not changed, it is completed.
+       */
+      const shiftId = shiftIds[SHIFT_BY_PATTERN[spec.code]];
+      if (shiftId && !existing.shiftId) {
+        await db.workPattern.update({
+          where: { id: existing.id },
+          data: { shiftId },
+        });
+      }
       continue;
     }
 
@@ -483,6 +564,7 @@ export async function seedHrDemo(params: {
         workingDayIndexes: spec.workingDayIndexes,
         anchorOn: PATTERN_ANCHOR,
         hoursPerDay: spec.hoursPerDay,
+        shiftId: shiftIds[SHIFT_BY_PATTERN[spec.code]] ?? null,
         isDefault: spec.isDefault,
       },
     });

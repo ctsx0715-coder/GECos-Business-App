@@ -242,11 +242,38 @@ export const hrRepository = {
     return db.complianceItem.delete({ where: { id } });
   },
 
+  listShifts(includeInactive = false) {
+    return db.shift.findMany({
+      where: includeInactive ? undefined : { isActive: true },
+      orderBy: [{ sortOrder: "asc" }, { startsAtMinutes: "asc" }],
+      include: { _count: { select: { patterns: true } } },
+    });
+  },
+
+  findShift(id: string) {
+    return db.shift.findUnique({ where: { id } });
+  },
+
+  findShiftByCode(code: string) {
+    return db.shift.findFirst({ where: { code } });
+  },
+
+  createShift(data: Omit<Prisma.ShiftUncheckedCreateInput, "organisationId">) {
+    return db.shift.create({ data: { ...data, organisationId: tenant() } });
+  },
+
+  updateShift(id: string, data: Prisma.ShiftUncheckedUpdateInput) {
+    return db.shift.update({ where: { id }, data });
+  },
+
   listWorkPatterns(includeInactive = false) {
     return db.workPattern.findMany({
       where: includeInactive ? undefined : { isActive: true },
       orderBy: [{ isDefault: "desc" }, { name: "asc" }],
-      include: { _count: { select: { employees: true } } },
+      include: {
+        shift: true,
+        _count: { select: { employees: true } },
+      },
     });
   },
 

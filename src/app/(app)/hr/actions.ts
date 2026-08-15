@@ -296,3 +296,27 @@ export async function removeAssignmentAction(
   revalidatePath("/hr/roster");
   return result;
 }
+
+export async function createShiftAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.createShift(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath("/hr/shifts");
+  revalidatePath("/hr/work-patterns");
+  return result;
+}
+
+export async function updateShiftAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.updateShift(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath("/hr/shifts");
+  revalidatePath("/hr/work-patterns");
+  return result;
+}

@@ -5,6 +5,11 @@ import { useFormAction } from "@/components/forms";
 import { describePattern } from "@/modules/hr/work-patterns";
 import { createWorkPatternAction, updateWorkPatternAction } from "../actions";
 
+interface Choice {
+  value: string;
+  label: string;
+}
+
 /**
  * Picking working days.
  *
@@ -71,6 +76,7 @@ function DayToggles({
 
 interface PatternValues {
   id?: string;
+  shiftId: string;
   code: string;
   name: string;
   description: string;
@@ -85,10 +91,12 @@ function PatternFields({
   values,
   set,
   editing,
+  shifts,
 }: {
   values: PatternValues;
   set: <K extends keyof PatternValues>(key: K, value: PatternValues[K]) => void;
   editing: boolean;
+  shifts: Choice[];
 }) {
   return (
     <>
@@ -131,6 +139,23 @@ function PatternFields({
             <option value={14}>14 — a fortnightly rotation</option>
             <option value={21}>21 — a three-week rotation</option>
             <option value={28}>28 — a four-week rotation</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-wide text-faint">
+            Shift
+          </span>
+          <select
+            value={values.shiftId}
+            onChange={(event) => set("shiftId", event.target.value)}
+            className={inputClass}
+          >
+            <option value="">No set hours</option>
+            {shifts.map((shift) => (
+              <option key={shift.value} value={shift.value}>
+                {shift.label}
+              </option>
+            ))}
           </select>
         </label>
         <label className="block">
@@ -202,6 +227,7 @@ function PatternFields({
 }
 
 const BLANK: PatternValues = {
+  shiftId: "",
   code: "",
   name: "",
   description: "",
@@ -212,7 +238,7 @@ const BLANK: PatternValues = {
   isActive: true,
 };
 
-export function NewWorkPattern() {
+export function NewWorkPattern({ shifts }: { shifts: Choice[] }) {
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState(BLANK);
   const set = <K extends keyof PatternValues>(key: K, value: PatternValues[K]) =>
@@ -237,7 +263,7 @@ export function NewWorkPattern() {
 
   return (
     <div className="w-full max-w-lg space-y-2 rounded-[14px] border border-border bg-surface p-4">
-      <PatternFields values={values} set={set} editing={false} />
+      <PatternFields values={values} set={set} editing={false} shifts={shifts} />
 
       {message && (
         <p className="rounded-lg bg-danger-soft px-3 py-2 text-xs font-medium text-danger">
@@ -249,7 +275,11 @@ export function NewWorkPattern() {
         <button
           type="button"
           disabled={pending || !values.code || values.name.trim().length < 2}
-          onClick={() => submit(() => createWorkPatternAction({ ...values }))}
+          onClick={() =>
+            submit(() =>
+              createWorkPatternAction({ ...values, shiftId: values.shiftId || null }),
+            )
+          }
           className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground transition hover:opacity-90 disabled:opacity-50"
         >
           {pending ? "Saving…" : "Create pattern"}
@@ -266,7 +296,13 @@ export function NewWorkPattern() {
   );
 }
 
-export function WorkPatternEditor({ pattern }: { pattern: PatternValues }) {
+export function WorkPatternEditor({
+  pattern,
+  shifts,
+}: {
+  pattern: PatternValues;
+  shifts: Choice[];
+}) {
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState(pattern);
   const set = <K extends keyof PatternValues>(key: K, value: PatternValues[K]) =>
@@ -288,7 +324,7 @@ export function WorkPatternEditor({ pattern }: { pattern: PatternValues }) {
 
   return (
     <div className="mt-3 space-y-2 rounded-[10px] border border-border bg-surface-muted p-3">
-      <PatternFields values={values} set={set} editing />
+      <PatternFields values={values} set={set} editing shifts={shifts} />
 
       {message && (
         <p className="rounded-lg bg-danger-soft px-3 py-2 text-xs font-medium text-danger">
@@ -309,6 +345,7 @@ export function WorkPatternEditor({ pattern }: { pattern: PatternValues }) {
                 cycleDays: values.cycleDays,
                 workingDayIndexes: values.workingDayIndexes,
                 hoursPerDay: values.hoursPerDay,
+                shiftId: values.shiftId || null,
                 isDefault: values.isDefault,
                 isActive: values.isActive,
               }),
