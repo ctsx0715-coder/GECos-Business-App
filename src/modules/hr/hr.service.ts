@@ -3,6 +3,7 @@ import { requireRequestContext } from "@/lib/database/tenant-context";
 import { BusinessRuleError, ForbiddenError, NotFoundError } from "@/lib/errors";
 import { requirePermission, hasPermission } from "@/lib/permissions";
 import {
+  addHolidaySchema,
   adjustBalanceSchema,
   cancelLeaveSchema,
   certificationSchema,
@@ -10,7 +11,9 @@ import {
   createLeaveTypeSchema,
   decideLeaveSchema,
   exitEmployeeSchema,
+  generateHolidaysSchema,
   removeCertificationSchema,
+  removeHolidaySchema,
   requestLeaveSchema,
   setBalanceSchema,
   updateEmployeeSchema,
@@ -24,6 +27,11 @@ import {
   cycleFor,
   previousCycle,
 } from "./leave-accrual";
+import {
+  isoDate,
+  statutoryHolidays,
+  workingDaysBetween as countWorkingDays,
+} from "./public-holidays";
 
 /**
  * HR business logic.
@@ -38,31 +46,14 @@ import {
  */
 
 /**
- * Working days between two dates, inclusive.
+ * Working days, re-exported.
  *
- * Weekends are excluded. South African public holidays are not, because the
- * Public Holidays Act moves a holiday falling on a Sunday to the Monday and
- * Nopedi may also close over a builders' shutdown that is not statutory at
- * all. Guessing produces leave balances that are quietly wrong, which is worse
- * than a count anyone can check — so the gap is named here and in the request
- * screen rather than papered over.
+ * The counting itself moved to public-holidays.ts when holidays arrived, since
+ * the two cannot be separated: a day off is a day off whether it is a Saturday
+ * or Freedom Day. This export stays because callers and tests refer to it, and
+ * because where a leave day count comes from is a fact about the HR service.
  */
-export function workingDaysBetween(startsAt: Date, endsAt: Date): number {
-  const start = new Date(
-    Date.UTC(startsAt.getUTCFullYear(), startsAt.getUTCMonth(), startsAt.getUTCDate()),
-  );
-  const end = new Date(
-    Date.UTC(endsAt.getUTCFullYear(), endsAt.getUTCMonth(), endsAt.getUTCDate()),
-  );
-  if (end < start) return 0;
-
-  let days = 0;
-  for (const day = start; day <= end; day.setUTCDate(day.getUTCDate() + 1)) {
-    const weekday = day.getUTCDay();
-    if (weekday !== 0 && weekday !== 6) days += 1;
-  }
-  return days;
-}
+export { workingDaysBetween } from "./public-holidays";
 
 export interface LeaveBalanceView {
   leaveTypeId: string;
@@ -633,6 +624,81 @@ export const hrService = {
     });
   },
 
+  // -- Public holidays ------------------------------------------------------
+
+  /**
+   * The days off in a range.
+   *
+   * Readable by anyone: which days the company is closed is not confidential,
+   * and the leave form needs it to tell somebody their week costs four days
+   * rather than five before they submit it.
+   */
+  async listHolidays(from: Date, to: Date) {
+    return hrRepository.listHolidays(from, to);
+  },
+
+  /** The same list as a set of YYYY-MM-DD, which is what the counter wants. */
+  async holidayDatesBetween(from: Date, to: Date): Promise<Set<string>> {
+    const holidays = await hrRepository.listHolidays(from, to);
+    return new Set(holidays.map((holiday) => isoDate(holiday.observedOn)));
+  },
+
+  /**
+   * Write a year's statutory holidays.
+   *
+   * Idempotent by date: a day already recorded is left exactly as it is, so a
+   * shutdown day somebody added by hand is never overwritten by the generator
+   * and running it twice adds nothing the second time.
+   */
+  async generateStatutoryHolidays(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const { year } = generateHolidaysSchema.parse(input);
+
+    let added = 0;
+    for (const holiday of statutoryHolidays(year)) {
+      const existing = await hrRepository.findHolidayOn(holiday.observedOn);
+      if (existing) continue;
+
+      await hrRepository.createHoliday({
+        observedOn: holiday.observedOn,
+        name: holiday.name,
+        isStatutory: true,
+      });
+      added += 1;
+    }
+    return { year, added };
+  },
+
+  /** A shutdown day, an election day, anything the calculation cannot know. */
+  async addHoliday(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const data = addHolidaySchema.parse(input);
+
+    const clash = await hrRepository.findHolidayOn(data.observedOn);
+    if (clash) {
+      throw new BusinessRuleError(
+        `${isoDate(data.observedOn)} is already recorded as ${clash.name}.`,
+      );
+    }
+
+    return hrRepository.createHoliday({
+      observedOn: data.observedOn,
+      name: data.name,
+      isStatutory: data.isStatutory,
+      notes: data.notes,
+    });
+  },
+
+  async removeHoliday(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const data = removeHolidaySchema.parse(input);
+
+    const holiday = await hrRepository.findHoliday(data.holidayId);
+    if (!holiday) throw new NotFoundError("Public holiday");
+
+    return hrRepository.deleteHoliday(data.holidayId);
+  },
+
   // -- Leave requests -------------------------------------------------------
 
   async listLeaveRequests(filter?: {
@@ -677,10 +743,16 @@ export const hrService = {
     const leaveType = await hrRepository.findLeaveType(data.leaveTypeId);
     if (!leaveType) throw new NotFoundError("Leave type");
 
-    const days = workingDaysBetween(data.startsAt, data.endsAt);
+    /*
+     * The holidays inside the range, not the whole year: a request is counted
+     * against the days the company is actually closed, and asking for exactly
+     * that range keeps the count honest when a shutdown is added later.
+     */
+    const holidays = await this.holidayDatesBetween(data.startsAt, data.endsAt);
+    const days = countWorkingDays(data.startsAt, data.endsAt, holidays);
     if (days === 0) {
       throw new BusinessRuleError(
-        "That range contains no working days. Weekends do not need to be booked.",
+        "That range contains no working days. Weekends and public holidays do not need to be booked.",
       );
     }
 

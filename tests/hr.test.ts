@@ -837,3 +837,106 @@ describe("seeing your own record", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("public holidays and leave", () => {
+  /** The Monday of a week containing a holiday we control. */
+  const WEEK = monday(3);
+
+  async function holidayOn(date: Date, name = "Company shutdown") {
+    return as("hr_manager", () =>
+      hrService.addHoliday({ observedOn: date, name }),
+    );
+  }
+
+  it("does not charge leave for a public holiday", async () => {
+    const employee = await anEmployee({ userId: org.userIds.employee });
+    const type = await annualLeave(15);
+    await withBalance(employee.id, type.id, 15);
+    // The Wednesday of the booked week is a day off.
+    await holidayOn(plus(WEEK, 2));
+
+    const request = await as("employee", () =>
+      hrService.requestLeave({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        startsAt: WEEK,
+        endsAt: plus(WEEK, 4),
+      }),
+    );
+
+    // Monday to Friday is five, less the holiday.
+    expect(Number(request.days)).toBe(4);
+  });
+
+  it("refuses a request that is nothing but holiday", async () => {
+    const employee = await anEmployee({ userId: org.userIds.employee });
+    const type = await annualLeave(15);
+    await withBalance(employee.id, type.id, 15);
+    await holidayOn(WEEK);
+
+    await expect(
+      as("employee", () =>
+        hrService.requestLeave({
+          employeeId: employee.id,
+          leaveTypeId: type.id,
+          startsAt: WEEK,
+          endsAt: WEEK,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(BusinessRuleError);
+  });
+
+  it("generates a year's statutory calendar once", async () => {
+    const first = await as("hr_manager", () =>
+      hrService.generateStatutoryHolidays({ year: 2027 }),
+    );
+    expect(first.added).toBeGreaterThan(10);
+
+    const second = await as("hr_manager", () =>
+      hrService.generateStatutoryHolidays({ year: 2027 }),
+    );
+    expect(second.added).toBe(0);
+  });
+
+  it("refuses two entries on the same day", async () => {
+    await holidayOn(WEEK, "Shutdown");
+    await expect(holidayOn(WEEK, "Also shutdown")).rejects.toBeInstanceOf(
+      BusinessRuleError,
+    );
+  });
+
+  it("keeps a day added by hand when the generator runs", async () => {
+    // Christmas Day 2027, recorded by hand with a company name on it first.
+    const christmas = new Date(Date.UTC(2027, 11, 25));
+    await holidayOn(christmas, "Closed — company");
+
+    await as("hr_manager", () =>
+      hrService.generateStatutoryHolidays({ year: 2027 }),
+    );
+
+    const holidays = await as("hr_manager", () =>
+      hrService.listHolidays(christmas, christmas),
+    );
+    expect(holidays).toHaveLength(1);
+    expect(holidays[0].name).toBe("Closed — company");
+  });
+
+  it("is not something an ordinary employee may configure", async () => {
+    await expect(
+      as("employee", () =>
+        hrService.addHoliday({ observedOn: WEEK, name: "A day I fancy off" }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("keeps one tenant's shutdown out of another's calendar", async () => {
+    await holidayOn(WEEK, "Nopedi shutdown");
+    const other = await seedOrganisation("Kgosi Civils");
+
+    const theirs = await withRequestContext(
+      { organisationId: other.organisationId, userId: other.userIds.hr_manager },
+      () => hrService.listHolidays(plus(WEEK, -30), plus(WEEK, 30)),
+    );
+    expect(theirs).toHaveLength(0);
+  });
+});

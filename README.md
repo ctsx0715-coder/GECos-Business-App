@@ -107,6 +107,19 @@ Not yet handled: the BCEA's rule that carried days expire six months into the
 new cycle. That needs a date the ledger does not record, so it is left undone
 rather than half-done.
 
+### Public holidays
+
+Leave is never charged for a day the company is closed. The twelve statutory
+holidays are generated per year — including Good Friday and Family Day, which
+move with Easter, and the Public Holidays Act's rule that a holiday falling on
+a Sunday is taken on the Monday — and anything the calculation cannot know is a
+row: a builders' shutdown, an election day proclaimed six weeks out. Both live
+on **People → Public holidays**, and the generator never overwrites a day
+somebody added by hand.
+
+The leave form counts with the same function and the same days as the service,
+so the number on the screen before submitting is the number that is charged.
+
 A cycle is the calendar year. An organisation whose leave year runs March to
 February is a policy answer we do not have yet, and it changes one function.
 

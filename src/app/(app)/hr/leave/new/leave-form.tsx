@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardHeader, Icon } from "@/components/ui";
 import {
   FormActions,
@@ -13,6 +13,7 @@ import {
   useFormAction,
 } from "@/components/forms";
 import { requestLeaveAction } from "../../actions";
+import { workingDaysBetween } from "@/modules/hr/public-holidays";
 import type { LeaveBalanceView } from "@/modules/hr/hr.service";
 
 interface Choice {
@@ -21,26 +22,24 @@ interface Choice {
 }
 
 /**
- * Counts Monday to Friday, matching the service.
+ * A live preview of what a range costs.
  *
- * Duplicated deliberately rather than imported: this is a live preview so
- * someone can see the cost of a range before submitting, and the number that
- * counts is the one the service computes when it parses the request. If the
- * two ever disagree the server wins, which is the right way round.
+ * The same function the service uses, given the same holidays, so the number
+ * on the screen is the number that will be charged. It is still only a
+ * preview — the count that lands in the ledger is the one the service computes
+ * when it parses the request, and if the two ever disagree the server wins.
  */
-function workingDays(start: string, end: string): number | null {
+function workingDays(
+  start: string,
+  end: string,
+  holidays: ReadonlySet<string>,
+): number | null {
   if (!start || !end) return null;
   const from = new Date(`${start}T00:00:00Z`);
   const to = new Date(`${end}T00:00:00Z`);
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return null;
   if (to < from) return null;
-
-  let days = 0;
-  for (const day = from; day <= to; day.setUTCDate(day.getUTCDate() + 1)) {
-    const weekday = day.getUTCDay();
-    if (weekday !== 0 && weekday !== 6) days += 1;
-  }
-  return days;
+  return workingDaysBetween(from, to, holidays);
 }
 
 export function LeaveForm({
@@ -48,11 +47,14 @@ export function LeaveForm({
   leaveTypes,
   employees,
   balances,
+  holidays,
 }: {
   myEmployeeId: string | null;
   leaveTypes: Choice[];
   employees: Choice[];
   balances: LeaveBalanceView[];
+  /** Days off in the window the form can book, as YYYY-MM-DD. */
+  holidays: string[];
 }) {
   const router = useRouter();
   const { pending, message, fieldErrors, submit } = useFormAction();
@@ -63,7 +65,8 @@ export function LeaveForm({
   const [endsAt, setEndsAt] = useState("");
   const [reason, setReason] = useState("");
 
-  const days = workingDays(startsAt, endsAt);
+  const holidayDates = useMemo(() => new Set(holidays), [holidays]);
+  const days = workingDays(startsAt, endsAt, holidayDates);
   const balance = balances.find((b) => b.leaveTypeId === leaveTypeId);
   const wouldOverdraw =
     balance && !balance.isUncapped && days !== null && days > balance.remainingDays;

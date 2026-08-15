@@ -20,6 +20,17 @@ export default async function NewLeavePage() {
         label: type.daysPerCycle === null ? `${type.name} (unpaid)` : type.name,
       })),
       balances: myEmployeeId ? await hrService.balancesFor(myEmployeeId) : [],
+      /*
+       * This year and next, which is as far ahead as anyone books. The form
+       * counts with the same days the service will, so the preview and the
+       * charge agree.
+       */
+      holidays: [
+        ...(await hrService.holidayDatesBetween(
+          new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1)),
+          new Date(Date.UTC(new Date().getUTCFullYear() + 1, 11, 31)),
+        )),
+      ],
       employees: mayBookForOthers
         ? (await hrService.listEmployees(["ACTIVE", "ON_LEAVE"])).map((e) => ({
             value: e.id,
@@ -35,13 +46,14 @@ export default async function NewLeavePage() {
     <>
       <PageHeader
         title="Request leave"
-        description="Working days are counted Monday to Friday"
+        description="Weekends and public holidays are not charged to leave"
       />
       <LeaveForm
         myEmployeeId={data.myEmployeeId}
         leaveTypes={data.leaveTypes}
         employees={data.employees}
         balances={data.balances}
+        holidays={data.holidays}
       />
     </>
   );

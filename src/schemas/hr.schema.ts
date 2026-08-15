@@ -161,6 +161,22 @@ export const removeCertificationSchema = z.object({
   certificationId: z.uuid(),
 });
 
+export const addHolidaySchema = z.object({
+  observedOn: z.coerce.date(),
+  name: z.string().trim().min(2, "Name the day."),
+  /** False for a shutdown or anything else the company chose itself. */
+  isStatutory: z.boolean().default(false),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+export const generateHolidaysSchema = z.object({
+  year: z.number().int().min(2000).max(2100),
+});
+
+export const removeHolidaySchema = z.object({
+  holidayId: z.uuid(),
+});
+
 export const requestLeaveSchema = z
   .object({
     employeeId: z.uuid(),
