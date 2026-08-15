@@ -422,3 +422,252 @@ describe("permissions and tenancy", () => {
     expect(theirs).toHaveLength(0);
   });
 });
+
+describe("adjusting a balance", () => {
+  it("adds days to the cycle in progress", async () => {
+    const employee = await anEmployee();
+    const type = await annualLeave(15);
+
+    await as("hr_manager", () =>
+      hrService.adjustBalance({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        days: 3,
+        reason: "Worked the Freedom Day public holiday.",
+      }),
+    );
+
+    const [balance] = await as("hr_manager", () =>
+      hrService.balancesFor(employee.id),
+    );
+    expect(balance.entitledDays).toBe(3);
+    expect(balance.remainingDays).toBe(3);
+  });
+
+  it("takes days back, and refuses to take back days already spent", async () => {
+    const employee = await anEmployee();
+    const type = await annualLeave(15);
+
+    await as("hr_manager", () =>
+      hrService.adjustBalance({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        days: 5,
+        reason: "Opening entitlement.",
+      }),
+    );
+    await as("hr_manager", () =>
+      hrService.adjustBalance({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        days: -2,
+        reason: "Recorded twice.",
+      }),
+    );
+
+    const [balance] = await as("hr_manager", () =>
+      hrService.balancesFor(employee.id),
+    );
+    expect(balance.entitledDays).toBe(3);
+
+    await expect(
+      as("hr_manager", () =>
+        hrService.adjustBalance({
+          employeeId: employee.id,
+          leaveTypeId: type.id,
+          days: -10,
+          reason: "Too far.",
+        }),
+      ),
+    ).rejects.toBeInstanceOf(BusinessRuleError);
+  });
+
+  it("is not something an ordinary employee may do", async () => {
+    const employee = await anEmployee();
+    const type = await annualLeave(15);
+
+    await expect(
+      as("employee", () =>
+        hrService.adjustBalance({
+          employeeId: employee.id,
+          leaveTypeId: type.id,
+          days: 30,
+          reason: "A generous afternoon.",
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});
+
+describe("running accrual", () => {
+  async function accruingType() {
+    return as("hr_manager", () =>
+      hrService.createLeaveType({
+        code: "ANNUAL",
+        name: "Annual leave",
+        daysPerCycle: 15,
+        accrualMethod: "MONTHLY_ACCRUAL",
+        accrualDaysPerPeriod: 1.25,
+      }),
+    );
+  }
+
+  it("creates the balance it needs and credits the months worked", async () => {
+    // Started before this cycle, so every completed month of it has been
+    // earned by the time the run happens in July.
+    const employee = await anEmployee({ startedAt: new Date("2020-01-06T00:00:00Z") });
+    await accruingType();
+
+    const asOf = new Date(Date.UTC(new Date().getUTCFullYear(), 6, 1));
+    const summary = await as("hr_manager", () => hrService.runAccrual({ asOf }));
+
+    expect(summary.balancesCreated).toBe(1);
+    expect(summary.daysCredited).toBe(7.5); // Six completed months.
+
+    const [balance] = await as("hr_manager", () =>
+      hrService.balancesFor(employee.id),
+    );
+    expect(balance.entitledDays).toBe(7.5);
+  });
+
+  it("changes nothing when run a second time", async () => {
+    await anEmployee({ startedAt: new Date("2020-01-06T00:00:00Z") });
+    await accruingType();
+    const asOf = new Date(Date.UTC(new Date().getUTCFullYear(), 6, 1));
+
+    await as("hr_manager", () => hrService.runAccrual({ asOf }));
+    const second = await as("hr_manager", () => hrService.runAccrual({ asOf }));
+
+    expect(second.daysCredited).toBe(0);
+    expect(second.balancesCredited).toBe(0);
+  });
+
+  it("leaves manual types alone", async () => {
+    const employee = await anEmployee({ startedAt: new Date("2020-01-06T00:00:00Z") });
+    await annualLeave(15); // Defaults to MANUAL.
+
+    const summary = await as("hr_manager", () => hrService.runAccrual());
+    expect(summary.daysCredited).toBe(0);
+    expect(await as("hr_manager", () => hrService.balancesFor(employee.id))).toHaveLength(0);
+  });
+
+  it("does not credit somebody who has left", async () => {
+    const employee = await anEmployee({ startedAt: new Date("2020-01-06T00:00:00Z") });
+    await accruingType();
+
+    await as("hr_manager", () =>
+      hrService.exitEmployee({
+        employeeId: employee.id,
+        endedAt: new Date(),
+        reason: "Resigned.",
+      }),
+    );
+
+    const summary = await as("hr_manager", () => hrService.runAccrual());
+    expect(summary.balancesCreated).toBe(0);
+    expect(summary.daysCredited).toBe(0);
+  });
+
+  it("refuses a leave type that could never credit anything", async () => {
+    await expect(
+      as("hr_manager", () =>
+        hrService.createLeaveType({
+          code: "STUDY",
+          name: "Study leave",
+          daysPerCycle: 5,
+          accrualMethod: "MONTHLY_ACCRUAL",
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+});
+
+describe("certifications", () => {
+  it("records a ticket against a person and lists it", async () => {
+    const employee = await anEmployee();
+
+    await as("hr_manager", () =>
+      hrService.addCertification({
+        employeeId: employee.id,
+        requirementName: "Working at heights",
+        category: "TRAINING",
+        expiresAt: new Date("2027-03-01T00:00:00Z"),
+      }),
+    );
+
+    const certifications = await as("hr_manager", () =>
+      hrService.certificationsFor(employee.id),
+    );
+    expect(certifications).toHaveLength(1);
+    expect(certifications[0].requirementName).toBe("Working at heights");
+  });
+
+  it("keeps a certification that never expires", async () => {
+    const employee = await anEmployee();
+    await as("hr_manager", () =>
+      hrService.addCertification({
+        employeeId: employee.id,
+        requirementName: "Trade test certificate",
+        category: "TRAINING",
+      }),
+    );
+
+    const certifications = await as("hr_manager", () =>
+      hrService.certificationsFor(employee.id),
+    );
+    expect(certifications[0].expiresAt).toBeNull();
+  });
+
+  it("refuses one that expires before it was issued", async () => {
+    const employee = await anEmployee();
+    await expect(
+      as("hr_manager", () =>
+        hrService.addCertification({
+          employeeId: employee.id,
+          requirementName: "Medical certificate of fitness",
+          category: "MEDICAL",
+          issuedAt: new Date("2026-06-01T00:00:00Z"),
+          expiresAt: new Date("2026-01-01T00:00:00Z"),
+        }),
+      ),
+    ).rejects.toBeInstanceOf(BusinessRuleError);
+  });
+
+  it("removes one without destroying the record", async () => {
+    const employee = await anEmployee();
+    const certification = await as("hr_manager", () =>
+      hrService.addCertification({
+        employeeId: employee.id,
+        requirementName: "Forklift licence",
+        category: "LICENCE",
+        expiresAt: new Date("2027-01-01T00:00:00Z"),
+      }),
+    );
+
+    await as("hr_manager", () =>
+      hrService.removeCertification({ certificationId: certification.id }),
+    );
+
+    expect(
+      await as("hr_manager", () => hrService.certificationsFor(employee.id)),
+    ).toHaveLength(0);
+
+    const row = await rawDb.complianceItem.findUnique({
+      where: { id: certification.id },
+    });
+    expect(row?.deletedAt).not.toBeNull();
+  });
+
+  it("is not something a tender officer may write", async () => {
+    const employee = await anEmployee();
+    await expect(
+      as("tender_officer", () =>
+        hrService.addCertification({
+          employeeId: employee.id,
+          requirementName: "Anything at all",
+          category: "TRAINING",
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});

@@ -47,22 +47,64 @@ export const exitEmployeeSchema = z.object({
   reason: z.string().trim().min(3, "Record why they are leaving."),
 });
 
-export const createLeaveTypeSchema = z.object({
-  code: z
-    .string()
-    .trim()
-    .min(2)
-    .max(20)
-    .regex(/^[A-Z0-9_]+$/, "Use capitals, digits and underscores."),
-  name: z.string().trim().min(2, "Name the leave type."),
+export const createLeaveTypeSchema = z
+  .object({
+    code: z
+      .string()
+      .trim()
+      .min(2)
+      .max(20)
+      .regex(/^[A-Z0-9_]+$/, "Use capitals, digits and underscores."),
+    name: z.string().trim().min(2, "Name the leave type."),
+    description: z.string().trim().max(1000).optional(),
+    /** Null means uncapped, which is how unpaid leave is expressed. */
+    daysPerCycle: z.number().nonnegative().max(365).nullable().optional(),
+    isPaid: z.boolean().default(true),
+    carryOverMaxDays: z.number().nonnegative().max(365).nullable().optional(),
+    documentRequiredAfterDays: z.number().int().nonnegative().max(365).nullable().optional(),
+    allowsBackdating: z.boolean().default(false),
+    accrualMethod: z.enum(["MANUAL", "ANNUAL_GRANT", "MONTHLY_ACCRUAL"]).default("MANUAL"),
+    accrualDaysPerPeriod: z.number().nonnegative().max(31).nullable().optional(),
+    sortOrder: z.number().int().min(0).max(999).default(0),
+  })
+  /*
+   * Two combinations would configure a type that can never credit anything,
+   * and both look fine until an administrator wonders why nobody's balance
+   * moved after a month. Rejecting them at the door is cheaper than the
+   * support conversation.
+   */
+  .refine(
+    (data) =>
+      data.accrualMethod !== "MONTHLY_ACCRUAL" ||
+      (data.accrualDaysPerPeriod ?? 0) > 0,
+    {
+      message: "Monthly accrual needs a number of days per month.",
+      path: ["accrualDaysPerPeriod"],
+    },
+  )
+  .refine(
+    (data) =>
+      data.accrualMethod !== "ANNUAL_GRANT" ||
+      (data.daysPerCycle ?? null) !== null,
+    {
+      message: "An annual grant needs an entitlement to grant.",
+      path: ["daysPerCycle"],
+    },
+  );
+
+export const updateLeaveTypeSchema = z.object({
+  leaveTypeId: z.uuid(),
+  name: z.string().trim().min(2, "Name the leave type.").optional(),
   description: z.string().trim().max(1000).optional(),
-  /** Null means uncapped, which is how unpaid leave is expressed. */
   daysPerCycle: z.number().nonnegative().max(365).nullable().optional(),
-  isPaid: z.boolean().default(true),
+  isPaid: z.boolean().optional(),
   carryOverMaxDays: z.number().nonnegative().max(365).nullable().optional(),
   documentRequiredAfterDays: z.number().int().nonnegative().max(365).nullable().optional(),
-  allowsBackdating: z.boolean().default(false),
-  sortOrder: z.number().int().min(0).max(999).default(0),
+  allowsBackdating: z.boolean().optional(),
+  accrualMethod: z.enum(["MANUAL", "ANNUAL_GRANT", "MONTHLY_ACCRUAL"]).optional(),
+  accrualDaysPerPeriod: z.number().nonnegative().max(31).nullable().optional(),
+  sortOrder: z.number().int().min(0).max(999).optional(),
+  isActive: z.boolean().optional(),
 });
 
 export const setBalanceSchema = z.object({
@@ -72,6 +114,51 @@ export const setBalanceSchema = z.object({
   cycleEndsAt: z.coerce.date(),
   entitledDays: z.number().nonnegative().max(365),
   broughtForwardDays: z.number().nonnegative().max(365).default(0),
+});
+
+/**
+ * Adding or removing days from a balance.
+ *
+ * Signed, because the correction after a mistake is the same action as the
+ * award that caused it, and an "adjust" that only ever adds leaves the person
+ * fixing it reaching for the database.
+ */
+export const adjustBalanceSchema = z.object({
+  employeeId: z.uuid(),
+  leaveTypeId: z.uuid(),
+  days: z
+    .number()
+    .refine((value) => value !== 0, "Enter a number of days to add or remove.")
+    .refine((value) => Math.abs(value) <= 365, "That is more than a year of leave."),
+  reason: z.string().trim().min(3, "Say why, so the balance can be explained later."),
+  /** Defaults to the cycle containing today. */
+  cycleStartsAt: z.coerce.date().optional(),
+});
+
+/**
+ * A ticket, medical or licence held by one person.
+ *
+ * Certifications are compliance items (ADR-004) rather than an HR-only table,
+ * so the expiry sweep that watches company accreditations watches these too
+ * without knowing what an employee is.
+ */
+export const certificationSchema = z.object({
+  employeeId: z.uuid(),
+  requirementName: z.string().trim().min(2, "Name the certification."),
+  category: z.enum(["TRAINING", "MEDICAL", "HSE", "LICENCE", "ACCREDITATION"]),
+  certificateNumber: z.string().trim().max(120).optional(),
+  providerName: z.string().trim().max(120).optional(),
+  issuedAt: z.coerce.date().optional(),
+  /**
+   * Optional because a trade test does not expire, and forcing a date would
+   * put a fictional one in the column the expiry sweep reads.
+   */
+  expiresAt: z.coerce.date().optional(),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+export const removeCertificationSchema = z.object({
+  certificationId: z.uuid(),
 });
 
 export const requestLeaveSchema = z

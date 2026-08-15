@@ -3,17 +3,22 @@ import { requireRequestContext } from "@/lib/database/tenant-context";
 import { BusinessRuleError, ForbiddenError, NotFoundError } from "@/lib/errors";
 import { requirePermission, hasPermission } from "@/lib/permissions";
 import {
+  adjustBalanceSchema,
   cancelLeaveSchema,
+  certificationSchema,
   createEmployeeSchema,
   createLeaveTypeSchema,
   decideLeaveSchema,
   exitEmployeeSchema,
+  removeCertificationSchema,
   requestLeaveSchema,
   setBalanceSchema,
   updateEmployeeSchema,
+  updateLeaveTypeSchema,
 } from "@/schemas/hr.schema";
 import type { EmployeeStatus, LeaveRequestStatus } from "@/generated/prisma/client";
 import { hrRepository } from "./hr.repository";
+import { accrualFor, cycleFor } from "./leave-accrual";
 
 /**
  * HR business logic.
@@ -161,15 +166,87 @@ export const hrService = {
     });
   },
 
+  // -- Certifications -------------------------------------------------------
+
+  /**
+   * The tickets one person holds.
+   *
+   * Your own are always visible, on the same rule as your own leave: a
+   * boilermaker checking when their coded welding qualification runs out
+   * should not need the permission that lets HR read everyone's medicals.
+   */
+  async certificationsFor(employeeId: string) {
+    await this.assertMaySeeEmployee(employeeId);
+    return hrRepository.listCertifications(employeeId);
+  },
+
+  async addCertification(input: unknown) {
+    await requirePermission("hr.certification.manage");
+    const data = certificationSchema.parse(input);
+
+    const employee = await hrRepository.findEmployee(data.employeeId);
+    if (!employee) throw new NotFoundError("Employee");
+
+    if (data.issuedAt && data.expiresAt && data.expiresAt < data.issuedAt) {
+      throw new BusinessRuleError("That expires before it was issued.");
+    }
+
+    return hrRepository.createCertification({
+      entityId: data.employeeId,
+      category: data.category,
+      requirementName: data.requirementName,
+      certificateNumber: data.certificateNumber,
+      providerName: data.providerName,
+      issuedAt: data.issuedAt,
+      expiresAt: data.expiresAt,
+      notes: data.notes,
+    });
+  },
+
+  /**
+   * Removing a certification.
+   *
+   * Soft, like every delete here. A ticket that was recorded and then removed
+   * is part of why an audit found what it found, and the row survives to say
+   * so (ADR-007).
+   */
+  async removeCertification(input: unknown) {
+    await requirePermission("hr.certification.manage");
+    const data = removeCertificationSchema.parse(input);
+
+    const certification = await hrRepository.findCertification(
+      data.certificationId,
+    );
+    if (!certification || certification.entityType !== "EMPLOYEE") {
+      throw new NotFoundError("Certification");
+    }
+
+    return hrRepository.deleteCertification(data.certificationId);
+  },
+
   // -- Leave configuration --------------------------------------------------
 
   async listLeaveTypes(includeInactive = false) {
     return hrRepository.listLeaveTypes(includeInactive);
   },
 
+  async getLeaveType(id: string) {
+    const leaveType = await hrRepository.findLeaveType(id);
+    if (!leaveType) throw new NotFoundError("Leave type");
+    return leaveType;
+  },
+
   async createLeaveType(input: unknown) {
     await requirePermission("hr.leave.configure");
     const data = createLeaveTypeSchema.parse(input);
+
+    const clash = await hrRepository.findLeaveTypeByCode(data.code);
+    if (clash) {
+      throw new BusinessRuleError(
+        `${data.code} is already in use by ${clash.name}.`,
+      );
+    }
+
     return hrRepository.createLeaveType({
       code: data.code,
       name: data.name,
@@ -179,8 +256,52 @@ export const hrService = {
       carryOverMaxDays: data.carryOverMaxDays ?? null,
       documentRequiredAfterDays: data.documentRequiredAfterDays ?? null,
       allowsBackdating: data.allowsBackdating,
+      accrualMethod: data.accrualMethod,
+      accrualDaysPerPeriod: data.accrualDaysPerPeriod ?? null,
       sortOrder: data.sortOrder,
     });
+  },
+
+  /**
+   * Changing a leave type.
+   *
+   * The code is not editable. It is what the seed, the backfill and any future
+   * import match on, and renaming it silently orphans every one of them — the
+   * name is the label, the code is the identity.
+   */
+  async updateLeaveType(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const { leaveTypeId, ...changes } = updateLeaveTypeSchema.parse(input);
+
+    const leaveType = await hrRepository.findLeaveType(leaveTypeId);
+    if (!leaveType) throw new NotFoundError("Leave type");
+
+    const method = changes.accrualMethod ?? leaveType.accrualMethod;
+    const perPeriod =
+      changes.accrualDaysPerPeriod !== undefined
+        ? changes.accrualDaysPerPeriod
+        : leaveType.accrualDaysPerPeriod === null
+          ? null
+          : Number(leaveType.accrualDaysPerPeriod);
+    const perCycle =
+      changes.daysPerCycle !== undefined
+        ? changes.daysPerCycle
+        : leaveType.daysPerCycle === null
+          ? null
+          : Number(leaveType.daysPerCycle);
+
+    // The same two impossible configurations the create schema refuses, caught
+    // again here because an edit can arrive at them one field at a time.
+    if (method === "MONTHLY_ACCRUAL" && !(perPeriod && perPeriod > 0)) {
+      throw new BusinessRuleError(
+        "Monthly accrual needs a number of days per month.",
+      );
+    }
+    if (method === "ANNUAL_GRANT" && perCycle === null) {
+      throw new BusinessRuleError("An annual grant needs an entitlement to grant.");
+    }
+
+    return hrRepository.updateLeaveType(leaveTypeId, changes);
   },
 
   async setBalance(input: unknown) {
@@ -209,6 +330,173 @@ export const hrService = {
         broughtForwardDays: data.broughtForwardDays,
       },
     );
+  },
+
+  /**
+   * Adding days to somebody's balance, or taking them back.
+   *
+   * Separate from `setBalance`, which writes an absolute figure for a cycle.
+   * Adding three days for a public holiday worked is a different act from
+   * declaring the year's entitlement, and conflating them is how an award ends
+   * up wiping an accrual that happened the same afternoon.
+   */
+  async adjustBalance(input: unknown) {
+    await requirePermission("hr.leave.configure");
+    const data = adjustBalanceSchema.parse(input);
+
+    const employee = await hrRepository.findEmployee(data.employeeId);
+    if (!employee) throw new NotFoundError("Employee");
+
+    const leaveType = await hrRepository.findLeaveType(data.leaveTypeId);
+    if (!leaveType) throw new NotFoundError("Leave type");
+    if (leaveType.daysPerCycle === null) {
+      throw new BusinessRuleError(
+        `${leaveType.name} is uncapped, so there is no balance to adjust.`,
+      );
+    }
+
+    const cycle = cycleFor(data.cycleStartsAt ?? new Date());
+    const existing = await hrRepository.findBalanceForCycle(
+      data.employeeId,
+      data.leaveTypeId,
+      cycle.startsAt,
+    );
+
+    if (!existing) {
+      if (data.days < 0) {
+        throw new BusinessRuleError(
+          "There is no balance for that cycle yet, so there is nothing to take away.",
+        );
+      }
+      return hrRepository.upsertBalance(
+        {
+          employeeId: data.employeeId,
+          leaveTypeId: data.leaveTypeId,
+          cycleStartsAt: cycle.startsAt,
+        },
+        {
+          cycleEndsAt: cycle.endsAt,
+          entitledDays: data.days,
+          broughtForwardDays: 0,
+          notes: data.reason,
+        },
+      );
+    }
+
+    // Removing days that have already been taken would leave the ledger
+    // claiming somebody was away on days they were never granted.
+    const available =
+      Number(existing.entitledDays) +
+      Number(existing.broughtForwardDays) -
+      Number(existing.takenDays);
+    if (data.days < 0 && Math.abs(data.days) > available) {
+      throw new BusinessRuleError(
+        `Only ${available} unused days remain, so ${Math.abs(data.days)} cannot be removed.`,
+      );
+    }
+
+    return hrRepository.adjustEntitlement(existing.id, data.days, data.reason);
+  },
+
+  /**
+   * Credit every balance with what it has earned since the last run.
+   *
+   * Runs from a schedule and from a button, and does the same thing either
+   * way. Idempotent by construction: each balance carries the date it was
+   * credited to, and the engine only ever grants the periods between that and
+   * today (see leave-accrual.ts). Running it twice in a day is a no-op, and a
+   * run that was missed for three months catches up all three.
+   */
+  async runAccrual(options?: { asOf?: Date }) {
+    await requirePermission("hr.leave.configure");
+    return this.accrueWithoutPermissionCheck(options);
+  },
+
+  /**
+   * The same run, for the scheduled job.
+   *
+   * The scheduler acts as the system rather than as a person, and a system
+   * context holds no permissions at all — so the check above would refuse the
+   * one caller that has to work unattended. Everything else goes through
+   * `runAccrual`.
+   */
+  async accrueWithoutPermissionCheck(options?: { asOf?: Date }) {
+    const asOf = options?.asOf ?? new Date();
+    const cycle = cycleFor(asOf);
+
+    const types = await hrRepository.listAccruingLeaveTypes();
+    const employees = await hrRepository.listEmployees([
+      "ACTIVE",
+      "ON_LEAVE",
+      "SUSPENDED",
+    ]);
+
+    const summary = {
+      asOf,
+      balancesCreated: 0,
+      balancesCredited: 0,
+      daysCredited: 0,
+    };
+
+    for (const leaveType of types) {
+      const existing = await hrRepository.balancesForCycle(
+        leaveType.id,
+        cycle.startsAt,
+      );
+      const byEmployee = new Map(existing.map((row) => [row.employeeId, row]));
+
+      for (const employee of employees) {
+        // Nothing accrues before somebody starts, and a cycle that ends before
+        // their first day never earns them anything.
+        if (employee.startedAt > cycle.endsAt) continue;
+
+        let balance = byEmployee.get(employee.id);
+        if (!balance) {
+          balance = await hrRepository.upsertBalance(
+            {
+              employeeId: employee.id,
+              leaveTypeId: leaveType.id,
+              cycleStartsAt: cycle.startsAt,
+            },
+            {
+              cycleEndsAt: cycle.endsAt,
+              entitledDays: 0,
+              broughtForwardDays: 0,
+            },
+          );
+          summary.balancesCreated += 1;
+        }
+
+        const outcome = accrualFor({
+          method: leaveType.accrualMethod,
+          daysPerPeriod:
+            leaveType.accrualDaysPerPeriod === null
+              ? null
+              : Number(leaveType.accrualDaysPerPeriod),
+          daysPerCycle:
+            leaveType.daysPerCycle === null ? null : Number(leaveType.daysPerCycle),
+          cycle,
+          startedAt: employee.startedAt,
+          endedAt: employee.endedAt,
+          entitledDays: Number(balance.entitledDays),
+          accruedThroughAt: balance.accruedThroughAt,
+          asOf,
+        });
+
+        if (outcome.creditDays <= 0 || !outcome.accruedThroughAt) continue;
+
+        await hrRepository.creditBalance(
+          balance.id,
+          outcome.creditDays,
+          outcome.accruedThroughAt,
+        );
+        summary.balancesCredited += 1;
+        summary.daysCredited += outcome.creditDays;
+      }
+    }
+
+    summary.daysCredited = Math.round(summary.daysCredited * 100) / 100;
+    return summary;
   },
 
   async balancesFor(employeeId: string): Promise<LeaveBalanceView[]> {

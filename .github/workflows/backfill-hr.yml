@@ -1,0 +1,63 @@
+name: Backfill HR demo data
+
+# Manually triggered, and additive.
+#
+# The seed truncates every table before it writes, which is correct for a fresh
+# database and ruinous for this one: it was seeded before the HR module existed,
+# so gaining a people register that way would cost every tender, lead and
+# project created since. This adds the HR dataset and destroys nothing.
+#
+# Safe to run twice — it adds only what is missing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type ADD to confirm — this writes demo employees and an HR Manager login'
+        required: true
+        default: ''
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the confirmation
+        if: inputs.confirm != 'ADD'
+        run: |
+          echo "::error::Confirmation failed. Type ADD exactly to run this."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The HR tables and the accrual columns have to exist before anything can
+      # be written into them. Deploys apply migrations too; this is here so the
+      # order cannot be got wrong by running the two in the wrong sequence.
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm prisma migrate deploy
+
+      - name: Backfill
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NOPEDI_DEMO_DATA: 'true'
+        run: pnpm hr:backfill
+
+      - name: Summary
+        run: |
+          echo "### HR data added" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Reload the deployment — no redeploy needed." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Sign in as Refilwe Molefe (HR Manager) for the people register," >> $GITHUB_STEP_SUMMARY
+          echo "the leave policy screen and the approval queue." >> $GITHUB_STEP_SUMMARY

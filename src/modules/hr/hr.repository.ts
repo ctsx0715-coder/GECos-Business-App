@@ -88,6 +88,48 @@ export const hrRepository = {
     return db.leaveType.create({ data: { ...data, organisationId: tenant() } });
   },
 
+  findLeaveTypeByCode(code: string) {
+    return db.leaveType.findFirst({ where: { code } });
+  },
+
+  updateLeaveType(id: string, data: Prisma.LeaveTypeUncheckedUpdateInput) {
+    return db.leaveType.update({ where: { id }, data });
+  },
+
+  /** Types that credit themselves, for the accrual run. */
+  listAccruingLeaveTypes() {
+    return db.leaveType.findMany({
+      where: { isActive: true, accrualMethod: { not: "MANUAL" } },
+      orderBy: { sortOrder: "asc" },
+    });
+  },
+
+  /** One balance per employee for a type and cycle, however many employees. */
+  balancesForCycle(leaveTypeId: string, cycleStartsAt: Date) {
+    return db.leaveBalance.findMany({ where: { leaveTypeId, cycleStartsAt } });
+  },
+
+  creditBalance(
+    balanceId: string,
+    days: number,
+    accruedThroughAt: Date,
+  ) {
+    return db.leaveBalance.update({
+      where: { id: balanceId },
+      data: {
+        entitledDays: { increment: days },
+        accruedThroughAt,
+      },
+    });
+  },
+
+  adjustEntitlement(balanceId: string, days: number, notes: string) {
+    return db.leaveBalance.update({
+      where: { id: balanceId },
+      data: { entitledDays: { increment: days }, notes },
+    });
+  },
+
   findBalance(employeeId: string, leaveTypeId: string, on: Date) {
     return db.leaveBalance.findFirst({
       where: {
@@ -108,9 +150,25 @@ export const hrRepository = {
     });
   },
 
+  findBalanceForCycle(
+    employeeId: string,
+    leaveTypeId: string,
+    cycleStartsAt: Date,
+  ) {
+    return db.leaveBalance.findFirst({
+      where: { employeeId, leaveTypeId, cycleStartsAt },
+      include: { leaveType: true },
+    });
+  },
+
   upsertBalance(
     key: { employeeId: string; leaveTypeId: string; cycleStartsAt: Date },
-    data: { cycleEndsAt: Date; entitledDays: number; broughtForwardDays: number },
+    data: {
+      cycleEndsAt: Date;
+      entitledDays: number;
+      broughtForwardDays: number;
+      notes?: string | null;
+    },
   ) {
     const organisationId = tenant();
     return db.leaveBalance.upsert({
@@ -130,6 +188,44 @@ export const hrRepository = {
       where: { id: balanceId },
       data: { takenDays: { increment: days } },
     });
+  },
+
+  /*
+   * Certifications are compliance items pointed at an employee (ADR-004).
+   * Reading them through Prisma rather than the raw query in hr-metrics is
+   * deliberate: that one answers "what is about to expire" for the dashboard
+   * and drops anything without an expiry date. A trade test never expires and
+   * still has to appear on the person's record.
+   */
+  listCertifications(employeeId: string) {
+    return db.complianceItem.findMany({
+      where: { entityType: "EMPLOYEE", entityId: employeeId },
+      orderBy: [{ expiresAt: "asc" }, { requirementName: "asc" }],
+    });
+  },
+
+  findCertification(id: string) {
+    return db.complianceItem.findUnique({ where: { id } });
+  },
+
+  createCertification(
+    data: Omit<
+      Prisma.ComplianceItemUncheckedCreateInput,
+      "organisationId" | "entityType"
+    >,
+  ) {
+    return db.complianceItem.create({
+      data: { ...data, entityType: "EMPLOYEE", organisationId: tenant() },
+    });
+  },
+
+  updateCertification(id: string, data: Prisma.ComplianceItemUncheckedUpdateInput) {
+    return db.complianceItem.update({ where: { id }, data });
+  },
+
+  /** Soft delete, like everything else — the extension rewrites it (ADR-007). */
+  deleteCertification(id: string) {
+    return db.complianceItem.delete({ where: { id } });
   },
 
   listLeaveRequests(filter?: {

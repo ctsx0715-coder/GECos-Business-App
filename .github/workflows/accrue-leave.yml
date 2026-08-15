@@ -1,0 +1,41 @@
+name: Accrue leave
+
+# The scheduled half of the accrual engine.
+#
+# Leave that only accrues when somebody remembers to press a button is not
+# accrual, so this runs on the first of every month and credits whatever has
+# been earned since the last run. The service it calls is the same one the
+# "Run accrual" button calls, and it is idempotent — each balance records the
+# date it has been credited to, so a duplicate run credits nothing and a run
+# that GitHub skipped catches up the next time it fires.
+#
+# GitHub's scheduler is best-effort and can be late by tens of minutes, which
+# does not matter here: the arithmetic is driven by the dates on the rows, not
+# by the moment the job happens to start.
+
+on:
+  schedule:
+    # 02:00 UTC on the 1st — 04:00 in Johannesburg, when nobody is booking leave.
+    - cron: '0 2 1 * *'
+  workflow_dispatch:
+
+jobs:
+  accrue:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Credit balances
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm hr:accrue

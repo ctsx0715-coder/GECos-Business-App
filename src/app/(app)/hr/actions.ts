@@ -41,6 +41,107 @@ export async function createEmployeeAction(
   return result;
 }
 
+export async function updateEmployeeAction(
+  employeeId: string,
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.updateEmployee(employeeId, input)),
+    () => ({ ok: true, redirectTo: `/hr/employees/${employeeId}` }),
+  );
+  revalidatePath(`/hr/employees/${employeeId}`);
+  revalidatePath("/hr/employees");
+  return result;
+}
+
+export async function addCertificationAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.addCertification(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath(`/hr/employees/${String(input.employeeId)}`);
+  revalidatePath("/compliance");
+  revalidatePath("/dashboard");
+  return result;
+}
+
+export async function removeCertificationAction(
+  certificationId: string,
+  employeeId: string,
+): Promise<ActionResult> {
+  const result = await run(() =>
+    withSession(async () => {
+      await hrService.removeCertification({ certificationId });
+    }),
+  );
+  revalidatePath(`/hr/employees/${employeeId}`);
+  revalidatePath("/compliance");
+  return result;
+}
+
+export async function adjustBalanceAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.adjustBalance(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath(`/hr/employees/${String(input.employeeId)}`);
+  return result;
+}
+
+export async function createLeaveTypeAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.createLeaveType(input)),
+    () => ({ ok: true, redirectTo: "/hr/leave/types" }),
+  );
+  revalidatePath("/hr/leave/types");
+  return result;
+}
+
+export async function updateLeaveTypeAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.updateLeaveType(input)),
+    () => ({ ok: true, redirectTo: "/hr/leave/types" }),
+  );
+  revalidatePath("/hr/leave/types");
+  return result;
+}
+
+/**
+ * Running accrual by hand.
+ *
+ * The schedule is what normally credits leave (.github/workflows/accrue-leave).
+ * This exists because a demonstration cannot wait until the first of the month,
+ * and because the run is idempotent — pressing it twice does nothing the second
+ * time, so there is no harm in it being a button.
+ */
+export async function runAccrualAction(): Promise<ActionResult> {
+  let credited = 0;
+  const result = await run(() =>
+    withSession(async () => {
+      const summary = await hrService.runAccrual();
+      credited = summary.daysCredited;
+    }),
+  );
+  revalidatePath("/hr/leave/types");
+  revalidatePath("/hr/employees");
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    message:
+      credited === 0
+        ? "Every balance is already up to date."
+        : `Credited ${credited} days.`,
+  };
+}
+
 export async function requestLeaveAction(
   input: Record<string, unknown>,
 ): Promise<FormResult> {

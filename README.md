@@ -48,6 +48,8 @@ in `src/generated/prisma` and is not committed.
 | `pnpm db:migrate` | Create and apply a migration |
 | `pnpm db:sync` | Reconcile permissions, roles and module flags into an existing database |
 | `pnpm db:seed` | Build a demo dataset from nothing — **truncates every table first** |
+| `pnpm hr:backfill` | Add the HR demo dataset to a database that already has data — additive, idempotent |
+| `pnpm hr:accrue` | Credit leave balances with what they have earned. Runs monthly from Actions |
 | `pnpm db:studio` | Browse the database |
 | `pnpm screenshots:lifecycle` | Drives the lifecycle preview and reporting screens, asserting on each |
 
@@ -72,6 +74,31 @@ production is serving from — and when the same commit sits on two branches,
 both builds race for Prisma's advisory lock and one fails. Schema belongs to
 the production deploy. If previews ever get a database of their own, set
 `NOPEDI_MIGRATE_ON_PREVIEW=true` in the preview environment.
+
+## Leave
+
+Entitlement is a ledger: a row per person, per leave type, per cycle, holding
+what they were granted, what they carried in and what they have taken. Nothing
+about that changed when accrual arrived — accrual is one more thing that
+credits the ledger, and the rules that spend against it never had to know.
+
+Each leave type says how it is credited:
+
+| Method | What it does |
+|---|---|
+| Set by hand | Nothing accrues. HR writes the entitlement |
+| Granted at the start of the cycle | The full entitlement on day one, or on a joiner's first day. Not pro-rated |
+| Accrues each completed month | A fixed number of days per calendar month worked in full. 1.25 reaches the BCEA's 15-day minimum, and a joiner pro-rates themselves |
+
+`pnpm hr:accrue` runs on the first of every month from GitHub Actions, and the
+leave policy screen has a button that calls the same service. Both are safe to
+repeat: every balance records the date it has been credited to, so a second run
+the same day credits nothing and a run missed for a quarter catches up all
+three months. The arithmetic is in `src/modules/hr/leave-accrual.ts`, with no
+database in it, and `leave-accrual.test.ts` drives it across a year.
+
+A cycle is the calendar year. An organisation whose leave year runs March to
+February is a policy answer we do not have yet, and it changes one function.
 
 ## Architecture in one page
 

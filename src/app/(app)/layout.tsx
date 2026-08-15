@@ -138,6 +138,15 @@ const NAV: NavItem[] = [
     parent: PEOPLE,
   },
   {
+    href: "/hr/leave/types",
+    label: "Leave policy",
+    icon: "shield",
+    moduleKey: "hr",
+    permission: "hr.leave.configure",
+    group: "main",
+    parent: PEOPLE,
+  },
+  {
     href: "/reports",
     label: "Reports",
     icon: "trend",

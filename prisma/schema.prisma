@@ -174,6 +174,22 @@ enum LeaveRequestStatus {
   CANCELLED
 }
 
+/// How entitlement is credited to a balance over time.
+///
+/// The ledger came first and stays underneath: whatever credits a balance, the
+/// spending rules do not change. This enum only says who does the crediting.
+enum LeaveAccrualMethod {
+  /// An administrator writes the entitlement. Nothing accrues on its own.
+  MANUAL
+  /// The whole cycle's entitlement lands on the first day of the cycle, or on
+  /// the employee's first day when they join mid-cycle. Not pro-rated —
+  /// choose MONTHLY_ACCRUAL for a policy that should pro-rate a joiner.
+  ANNUAL_GRANT
+  /// A fixed number of days for every calendar month worked in full. This is
+  /// the BCEA shape: 1.25 days a month earns the statutory 15-day minimum.
+  MONTHLY_ACCRUAL
+}
+
 enum ComplianceCategory {
   TRAINING
   MEDICAL
@@ -1297,6 +1313,14 @@ model LeaveType {
   /// Whether a request may be backdated. Sick leave usually is; annual is not.
   allowsBackdating Boolean @default(false)
 
+  /// How this type's entitlement is credited. MANUAL is the default because
+  /// it is what every existing row did before accrual existed, and a migration
+  /// that silently started crediting days would rewrite people's balances.
+  accrualMethod LeaveAccrualMethod @default(MANUAL)
+  /// Days credited per completed month under MONTHLY_ACCRUAL. Ignored by the
+  /// other methods, which take their figure from daysPerCycle.
+  accrualDaysPerPeriod Decimal? @db.Decimal(6, 2)
+
   sortOrder Int @default(0)
   isActive  Boolean @default(true)
 
@@ -1338,6 +1362,15 @@ model LeaveBalance {
   /// Approved and taken. Pending requests are not counted here — they are
   /// counted at request time, so two overlapping requests cannot both fit.
   takenDays     Decimal @default(0) @db.Decimal(6, 2)
+
+  /// The date up to which accrual has already credited this balance. It is
+  /// what makes a run idempotent: the engine credits the periods between this
+  /// and today, so running it twice in one day changes nothing. Null means
+  /// nothing has accrued yet — a hand-written entitlement leaves it null.
+  accruedThroughAt DateTime? @db.Timestamptz(6)
+  /// Why the entitlement is what it is, when a person set it. The audit log
+  /// records who and when; this records the reason they gave.
+  notes            String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
