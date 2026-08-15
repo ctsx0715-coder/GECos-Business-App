@@ -3,10 +3,10 @@
 A centralised platform for managing people, customers, projects, tenders,
 procurement, assets, compliance and financial operations from one system.
 
-Currently at **Stage 1 — walking skeleton**. One vertical slice through the
-Tenders module, built to prove the architecture holds before it is scaled to
-the remaining modules. See [`docs/01-demo-scope.md`](docs/01-demo-scope.md) for
-what is deliberately in and out of scope.
+Past the walking skeleton. Tenders, CRM, Projects and HR are built, with
+record-level reporting and a design system across all of them. Five Stage 1
+acceptance criteria remain open, every one blocked on an external account
+rather than a decision — see [`docs/01-demo-scope.md`](docs/01-demo-scope.md).
 
 ## Documentation
 
@@ -71,6 +71,11 @@ layer every path goes through.
 (`src/lib/database/extensions.ts`) injects it into reads and writes from an
 AsyncLocalStorage request context, so no caller has to remember. Queries with
 no context bound throw rather than returning everything.
+
+**One employee is not one user.** A user can sign in; an employee is on the
+payroll. Most site staff are the latter only. Keeping them as separate records
+is why nobody has to invent a login for a boilermaker who will never use the
+system.
 
 **Nothing is hard deleted.** `delete` is rewritten as an update setting
 `deletedAt`, and reads filter it out. The row and its history survive.

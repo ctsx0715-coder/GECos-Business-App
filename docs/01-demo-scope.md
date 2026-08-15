@@ -73,8 +73,10 @@ Blob, Resend, Sentry) rather than on design decisions.
       context, not just by clicking around
 - [x] A Tender Officer cannot approve their own tender — a 403 from the service
       layer, not a hidden button. Holding `tenders.tender.approve` is not
-      enough if you own or submitted the tender. (Enforced and tested in the
-      service; the server action wrapping it is still to come.)
+      enough if you own or submitted the tender. The server action wraps it and
+      the tests assert the error *class*, not just its wording: downgrade the
+      ForbiddenError to a plain Error and the rule still holds, but the
+      approver gets a crash page instead of being told why.
 - [ ] A 40MB PDF uploads successfully without passing through a function
 - [ ] Uploading the same document twice creates version 2, and version 1 is
       still retrievable
@@ -102,9 +104,8 @@ only once its acceptance criteria held.
 
 ## Two stages
 
-**Stage 1 — skeleton.** Correctness over appearance. Default shadcn styling,
-no custom design work. Ends when the acceptance criteria above pass.
-Roughly 2–3 weeks.
+**Stage 1 — skeleton.** Correctness over appearance. Default styling, no custom
+design work. Ends when the acceptance criteria above pass. Roughly 2–3 weeks.
 
 **Stage 2 — polish.** Only after Stage 1 passes. Real branding, considered
 empty states, loading skeletons, a seeded dataset that looks like a plausible
@@ -113,6 +114,15 @@ Roughly 1 week.
 
 Do not interleave these. Polishing a skeleton you might still tear up is the
 most reliable way to waste a week.
+
+**What actually happened, recorded because the rule above was broken.** The
+design system landed while five Stage 1 criteria were still open. The
+justification is that every one of them is blocked on an external account
+rather than on a design decision — no amount of styling can invalidate a
+document upload that has no storage behind it — so there was nothing left for
+polish to waste. That reasoning is worth checking rather than reusing: it holds
+because the remaining work is credentials, and it would not have held a month
+earlier.
 
 ## Seed data for Stage 2
 
@@ -155,8 +165,22 @@ Projects needed no platform changes either. Five models registered, and the
 same separation-of-duties pattern the tender approvals use was reapplied to
 expense approval without touching the mechanism.
 
+**HR followed**, completing the agreed order. People, certifications and leave.
+It is the sharpest test of the claim so far, because it is the first module
+whose subject the code was not allowed to decide: South African leave
+entitlement is the BCEA as a floor, raised by a bargaining council agreement or
+company policy, and we do not know which bind Nopedi. So entitlement is rows
+rather than rules, and the service only spends against a balance it was given.
+
+Two things it did not get for free, both worth recording. Employee
+certifications needed no new table — they are compliance items pointed at a
+person, so the expiry sweep and warnings already existed — but the audit
+extension could not serialise a Decimal, and leave is the first thing measured
+in half days rather than integer cents. That is one platform change across four
+modules.
+
 That is the claim the walking skeleton was built to test, now with evidence
-from two modules: each one after the first is CRUD on proven rails.
+from three modules: each one after the first is CRUD on proven rails.
 
 ## The input layer
 

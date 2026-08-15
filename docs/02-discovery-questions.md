@@ -42,6 +42,13 @@ nearly free and materially improves adoption.
 
 ## Blocking before HR
 
+**HR is now built, so these have moved from "before we start" to "before anyone
+relies on the numbers".** Leave types and balances are seeded with the BCEA
+statutory minimums, which is the legal floor rather than necessarily Nopedi's
+policy. They are rows, so each answer below is a data change — but until they
+are answered the balances on screen are a plausible guess, and a leave balance
+that is quietly wrong is discovered in December.
+
 - Are they on a bargaining council or sectoral determination? That constrains
   leave and overtime rules and is not negotiable.
 - Leave types and accrual rules, including BCEA minimums versus their policy.
@@ -50,6 +57,11 @@ nearly free and materially improves adoption.
 - Do they need payroll, or does payroll stay where it is? Assume it stays.
 - Employment equity and BBBEE reporting obligations.
 - How is attendance captured today — biometric, manual, site register?
+- Which public holidays and shutdown periods do they observe? Leave currently
+  counts Monday to Friday and does not deduct public holidays, which the
+  request screen says outright rather than hiding.
+- Does leave accrue monthly, or is it granted annually? The ledger is built;
+  the rule that tops it up is deliberately absent.
 
 ## Blocking before Projects
 
