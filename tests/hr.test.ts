@@ -671,3 +671,169 @@ describe("certifications", () => {
     ).rejects.toBeInstanceOf(ForbiddenError);
   });
 });
+
+describe("carrying leave into a new cycle", () => {
+  /** Last calendar year, which is the cycle the rollover reads from. */
+  const LAST_YEAR_START = new Date(
+    Date.UTC(new Date().getUTCFullYear() - 1, 0, 1),
+  );
+  const LAST_YEAR_END = new Date(
+    Date.UTC(new Date().getUTCFullYear() - 1, 11, 31),
+  );
+  /** Mid-January of the cycle in progress: after the boundary, before much else. */
+  const THIS_JANUARY = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 15));
+
+  async function typeWithCarryOver(carryOverMaxDays: number | null) {
+    return as("hr_manager", () =>
+      hrService.createLeaveType({
+        code: "ANNUAL",
+        name: "Annual leave",
+        daysPerCycle: 15,
+        carryOverMaxDays,
+      }),
+    );
+  }
+
+  async function closingBalance(
+    employeeId: string,
+    leaveTypeId: string,
+    entitledDays: number,
+  ) {
+    return as("hr_manager", () =>
+      hrService.setBalance({
+        employeeId,
+        leaveTypeId,
+        cycleStartsAt: LAST_YEAR_START,
+        cycleEndsAt: LAST_YEAR_END,
+        entitledDays,
+      }),
+    );
+  }
+
+  it("brings unused days forward, up to the cap", async () => {
+    const employee = await anEmployee({ startedAt: new Date("2020-01-06T00:00:00Z") });
+    const type = await typeWithCarryOver(5);
+    await closingBalance(employee.id, type.id, 3);
+
+    const summary = await as("hr_manager", () =>
+      hrService.runAccrual({ asOf: THIS_JANUARY }),
+    );
+    expect(summary.daysCarriedOver).toBe(3);
+
+    const current = (
+      await as("hr_manager", () => hrService.balancesFor(employee.id))
+    ).find((balance) => balance.leaveTypeId === type.id);
+    expect(current?.broughtForwardDays).toBe(3);
+  });
+
+  it("carries no more than the policy allows", async () => {
+    const employee = await anEmployee({ startedAt: new Date("2020-01-06T00:00:00Z") });
+    const type = await typeWithCarryOver(5);
+    await closingBalance(employee.id, type.id, 12);
+
+    await as("hr_manager", () => hrService.runAccrual({ asOf: THIS_JANUARY }));
+
+    const current = (
+      await as("hr_manager", () => hrService.balancesFor(employee.id))
+    ).find((balance) => balance.leaveTypeId === type.id);
+    expect(current?.broughtForwardDays).toBe(5);
+  });
+
+  it("carries nothing for a type with no carry-over policy", async () => {
+    const employee = await anEmployee({ startedAt: new Date("2020-01-06T00:00:00Z") });
+    const type = await typeWithCarryOver(null);
+    await closingBalance(employee.id, type.id, 12);
+
+    const summary = await as("hr_manager", () =>
+      hrService.runAccrual({ asOf: THIS_JANUARY }),
+    );
+    expect(summary.daysCarriedOver).toBe(0);
+  });
+
+  it("does not double up when the run happens twice", async () => {
+    const employee = await anEmployee({ startedAt: new Date("2020-01-06T00:00:00Z") });
+    const type = await typeWithCarryOver(5);
+    await closingBalance(employee.id, type.id, 4);
+
+    await as("hr_manager", () => hrService.runAccrual({ asOf: THIS_JANUARY }));
+    const second = await as("hr_manager", () =>
+      hrService.runAccrual({ asOf: THIS_JANUARY }),
+    );
+
+    expect(second.daysCarriedOver).toBe(0);
+    const current = (
+      await as("hr_manager", () => hrService.balancesFor(employee.id))
+    ).find((balance) => balance.leaveTypeId === type.id);
+    expect(current?.broughtForwardDays).toBe(4);
+  });
+
+  it("carries nothing for somebody who has left", async () => {
+    const employee = await anEmployee({ startedAt: new Date("2020-01-06T00:00:00Z") });
+    const type = await typeWithCarryOver(5);
+    await closingBalance(employee.id, type.id, 4);
+    await as("hr_manager", () =>
+      hrService.exitEmployee({
+        employeeId: employee.id,
+        endedAt: new Date(),
+        reason: "End of contract.",
+      }),
+    );
+
+    const summary = await as("hr_manager", () =>
+      hrService.runAccrual({ asOf: THIS_JANUARY }),
+    );
+    expect(summary.daysCarriedOver).toBe(0);
+  });
+});
+
+describe("seeing your own record", () => {
+  /** The site supervisor: a login with no HR permissions at all. */
+  async function meAsEmployee() {
+    return as("hr_manager", () =>
+      hrService.createEmployee({
+        firstName: "Anele",
+        lastName: "Dlamini",
+        jobTitle: "Site Supervisor",
+        startedAt: new Date("2024-03-01T00:00:00Z"),
+        userId: org.userIds.employee,
+      }),
+    );
+  }
+
+  it("needs no permission", async () => {
+    const mine = await meAsEmployee();
+    const record = await as("employee", () => hrService.getEmployee(mine.id));
+    expect(record.firstName).toBe("Anele");
+  });
+
+  it("does not extend to anyone else's", async () => {
+    await meAsEmployee();
+    const someoneElse = await anEmployee({
+      firstName: "Jacob",
+      lastName: "Mthembu",
+    });
+
+    await expect(
+      as("employee", () => hrService.getEmployee(someoneElse.id)),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("carries the balances and certifications with it", async () => {
+    const mine = await meAsEmployee();
+    const type = await annualLeave(15);
+    await withBalance(mine.id, type.id, 15);
+    await as("hr_manager", () =>
+      hrService.addCertification({
+        employeeId: mine.id,
+        requirementName: "Working at heights",
+        category: "TRAINING",
+        expiresAt: new Date("2027-01-01T00:00:00Z"),
+      }),
+    );
+
+    expect(await as("employee", () => hrService.balancesFor(mine.id))).toHaveLength(1);
+    expect(
+      await as("employee", () => hrService.certificationsFor(mine.id)),
+    ).toHaveLength(1);
+  });
+});

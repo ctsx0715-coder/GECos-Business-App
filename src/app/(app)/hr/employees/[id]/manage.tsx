@@ -6,6 +6,7 @@ import { Icon } from "@/components/ui";
 import {
   addCertificationAction,
   adjustBalanceAction,
+  exitEmployeeAction,
   removeCertificationAction,
 } from "../../actions";
 
@@ -296,6 +297,82 @@ export function AdjustBalanceInline({
         className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground transition hover:opacity-90 disabled:opacity-50"
       >
         {pending ? "Saving…" : "Apply"}
+      </button>
+    </Disclosure>
+  );
+}
+
+/**
+ * Ending employment.
+ *
+ * Not a status on the edit form, because it is not a status change: it cancels
+ * every day of leave booked beyond the last day, keeps the record for the
+ * statutory retention period, and cannot be undone from the interface. A
+ * disclosure that states what will happen before it happens is the least this
+ * deserves.
+ */
+export function EndEmployment({
+  employeeId,
+  name,
+}: {
+  employeeId: string;
+  name: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [endedAt, setEndedAt] = useState("");
+  const [reason, setReason] = useState("");
+
+  const { pending, message, submit } = useFormAction(() => {
+    setOpen(false);
+    setEndedAt("");
+    setReason("");
+  });
+
+  return (
+    <Disclosure
+      label="End employment"
+      open={open}
+      onToggle={() => setOpen(!open)}
+    >
+      <p className="rounded-[10px] border border-border bg-surface-muted px-3 py-2 text-xs text-muted">
+        <strong className="font-medium text-foreground">
+          {name} will be marked as having left.
+        </strong>{" "}
+        Any leave booked for after the last day is cancelled. The record and its
+        history are kept — employment records carry a statutory retention
+        period, so nothing is deleted.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-wide text-faint">
+            Last day
+          </span>
+          <input
+            type="date"
+            value={endedAt}
+            onChange={(event) => setEndedAt(event.target.value)}
+            className={inputClass}
+          />
+        </label>
+      </div>
+      <input
+        value={reason}
+        onChange={(event) => setReason(event.target.value)}
+        placeholder="Reason — resignation, end of contract, retirement…"
+        className={inputClass}
+      />
+
+      <Note tone="danger" message={message} />
+
+      <button
+        type="button"
+        disabled={pending || !endedAt || reason.trim().length < 3}
+        onClick={() =>
+          submit(() => exitEmployeeAction({ employeeId, endedAt, reason }))
+        }
+        className="rounded-lg border border-danger px-3 py-1.5 text-sm font-medium text-danger transition hover:bg-danger-soft disabled:opacity-50"
+      >
+        {pending ? "Saving…" : "End employment"}
       </button>
     </Disclosure>
   );

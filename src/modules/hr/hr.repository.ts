@@ -123,6 +123,18 @@ export const hrRepository = {
     });
   },
 
+  /**
+   * Set rather than increment, which is what makes the rollover idempotent:
+   * the figure is recomputed from the closing cycle every time, so running it
+   * twice lands on the same number instead of doubling it.
+   */
+  setBroughtForward(balanceId: string, days: number) {
+    return db.leaveBalance.update({
+      where: { id: balanceId },
+      data: { broughtForwardDays: days },
+    });
+  },
+
   adjustEntitlement(balanceId: string, days: number, notes: string) {
     return db.leaveBalance.update({
       where: { id: balanceId },

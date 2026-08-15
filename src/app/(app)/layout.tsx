@@ -47,8 +47,16 @@ interface NavItem {
   label: string;
   icon: IconName;
   moduleKey: string;
-  permission: PermissionKey;
+  /**
+   * Omitted for a screen that shows a person only their own record. There is
+   * no permission for being yourself, and inventing one would mean an
+   * administrator could take it away and leave somebody unable to read their
+   * own leave balance.
+   */
+  permission?: PermissionKey;
   group: GroupKey;
+  /** Shown only when the signed-in user has an employee record. */
+  needsEmployeeRecord?: boolean;
   /** Items sharing a parent are nested under it with tree connectors. */
   parent?: { label: string; icon: IconName };
 }
@@ -118,6 +126,15 @@ const NAV: NavItem[] = [
     moduleKey: "projects",
     permission: "projects.project.view",
     group: "main",
+  },
+  {
+    href: "/hr/me",
+    label: "My record",
+    icon: "userPlus",
+    moduleKey: "hr",
+    group: "main",
+    needsEmployeeRecord: true,
+    parent: PEOPLE,
   },
   {
     href: "/hr/employees",
@@ -251,11 +268,27 @@ export default async function AppLayout({
       }),
   );
 
+  /*
+   * One extra query, and only when the tenant runs HR: whether this login is
+   * also on the payroll. It decides a single nav item, and there is no
+   * permission that could answer it — being an employee is a fact about the
+   * person, not a right somebody granted them.
+   */
+  const hasEmployeeRecord = enabledModules.has("hr")
+    ? await withRequestContext(
+        { organisationId: session.organisationId, userId: session.userId },
+        async () =>
+          (await db.employee.count({ where: { userId: session.userId } })) > 0,
+      )
+    : false;
+
   const groups = buildGroups(
     NAV.filter(
       (item) =>
         enabledModules.has(item.moduleKey) &&
-        session.permissions.has(item.permission),
+        (item.permission === undefined ||
+          session.permissions.has(item.permission)) &&
+        (!item.needsEmployeeRecord || hasEmployeeRecord),
     ),
   );
 

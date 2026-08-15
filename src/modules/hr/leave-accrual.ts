@@ -138,6 +138,50 @@ export function accrualFor(input: AccrualInput): AccrualOutcome {
   };
 }
 
+export interface CarryOverInput {
+  /** Days the policy allows across the boundary. Null means none. */
+  carryOverMaxDays: number | null;
+  /** The closing balance of the cycle that just ended, if there was one. */
+  previous: {
+    entitledDays: number;
+    broughtForwardDays: number;
+    takenDays: number;
+  } | null;
+}
+
+/**
+ * What survives the end of a cycle.
+ *
+ * Unused days up to the policy limit, and not a day more. Two things this
+ * deliberately does not do: it does not carry a negative balance forward,
+ * because leave taken in advance is a payroll matter rather than a debt
+ * against next year's entitlement; and it does not touch the cycle that ended,
+ * whose closing figures stay exactly as they were so the year can still be
+ * explained after the fact.
+ *
+ * The BCEA also says leave must be taken within six months of the cycle
+ * closing. Expiring carried days on that clock needs a date this ledger does
+ * not record yet, so it is not attempted here rather than half-done.
+ */
+export function carryOverFor(input: CarryOverInput): number {
+  const cap = input.carryOverMaxDays;
+  if (cap === null || cap <= 0 || !input.previous) return 0;
+
+  const unused =
+    input.previous.entitledDays +
+    input.previous.broughtForwardDays -
+    input.previous.takenDays;
+
+  return round2(Math.min(Math.max(unused, 0), cap));
+}
+
+/** The cycle immediately before this one. */
+export function previousCycle(cycle: LeaveCycle): LeaveCycle {
+  const dayBefore = new Date(cycle.startsAt);
+  dayBefore.setUTCDate(dayBefore.getUTCDate() - 1);
+  return cycleFor(dayBefore);
+}
+
 /** Two decimals, because the column is Decimal(6,2) and 1.25 × 3 is not. */
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
