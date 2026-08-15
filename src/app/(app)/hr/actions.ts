@@ -199,3 +199,47 @@ export async function cancelLeaveAction(
   revalidatePath("/hr/leave");
   return result;
 }
+
+export async function generateHolidaysAction(
+  year: number,
+): Promise<ActionResult> {
+  let added = 0;
+  const result = await run(() =>
+    withSession(async () => {
+      const summary = await hrService.generateStatutoryHolidays({ year });
+      added = summary.added;
+    }),
+  );
+  revalidatePath("/hr/leave/holidays");
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    message:
+      added === 0
+        ? `${year} is already complete.`
+        : `Added ${added} ${added === 1 ? "day" : "days"} for ${year}.`,
+  };
+}
+
+export async function addHolidayAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.addHoliday(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath("/hr/leave/holidays");
+  return result;
+}
+
+export async function removeHolidayAction(
+  holidayId: string,
+): Promise<ActionResult> {
+  const result = await run(() =>
+    withSession(async () => {
+      await hrService.removeHoliday({ holidayId });
+    }),
+  );
+  revalidatePath("/hr/leave/holidays");
+  return result;
+}

@@ -282,6 +282,7 @@ model Organisation {
   deletedAt    DateTime?    @db.Timestamptz(6)
 
   modules          OrganisationModule[]
+  publicHolidays   PublicHoliday[]
   users            User[]
   roles            Role[]
   customers        Customer[]
@@ -1386,6 +1387,42 @@ model LeaveBalance {
   @@index([organisationId])
   @@index([organisationId, employeeId])
   @@map("leave_balances")
+}
+
+/// A day the company does not work, and therefore does not charge to leave.
+///
+/// Per tenant, not global, because half of them are not statutory: a builders'
+/// shutdown between Christmas and New Year is a company decision, and an
+/// election day is declared by the President a few weeks beforehand. Both have
+/// to be addable without a deployment, which means rows.
+///
+/// The statutory twelve are generated rather than typed — including Good
+/// Friday and Family Day, which move with Easter, and the Public Holidays Act
+/// rule that a holiday falling on a Sunday is observed on the Monday.
+model PublicHoliday {
+  id             String   @id @default(uuid()) @db.Uuid
+  organisationId String   @db.Uuid
+  /// The day itself, at UTC midnight. Where a Sunday holiday is observed on
+  /// the Monday, this is the Monday — the day nobody comes to work.
+  observedOn     DateTime @db.Timestamptz(6)
+  name           String
+  /// False for a company shutdown or anything else Nopedi chose themselves.
+  isStatutory    Boolean  @default(true)
+  notes          String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, observedOn])
+  @@index([organisationId])
+  @@index([organisationId, observedOn])
+  @@map("public_holidays")
 }
 
 /// A request to be away, and its decision.

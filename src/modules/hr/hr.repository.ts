@@ -240,6 +240,33 @@ export const hrRepository = {
     return db.complianceItem.delete({ where: { id } });
   },
 
+  listHolidays(from: Date, to: Date) {
+    return db.publicHoliday.findMany({
+      where: { observedOn: { gte: from, lte: to } },
+      orderBy: { observedOn: "asc" },
+    });
+  },
+
+  findHoliday(id: string) {
+    return db.publicHoliday.findUnique({ where: { id } });
+  },
+
+  findHolidayOn(observedOn: Date) {
+    return db.publicHoliday.findFirst({ where: { observedOn } });
+  },
+
+  createHoliday(
+    data: Omit<Prisma.PublicHolidayUncheckedCreateInput, "organisationId">,
+  ) {
+    return db.publicHoliday.create({
+      data: { ...data, organisationId: tenant() },
+    });
+  },
+
+  deleteHoliday(id: string) {
+    return db.publicHoliday.delete({ where: { id } });
+  },
+
   listLeaveRequests(filter?: {
     status?: LeaveRequestStatus[];
     employeeId?: string;

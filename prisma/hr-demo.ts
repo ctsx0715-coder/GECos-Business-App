@@ -1,5 +1,6 @@
 import { db } from "@/lib/database/client";
 import { nextReference } from "@/lib/database/reference-numbers";
+import { statutoryHolidays } from "@/modules/hr/public-holidays";
 import type { ComplianceCategory, EmploymentType, LeaveAccrualMethod } from "@/generated/prisma/client";
 
 /**
@@ -334,11 +335,26 @@ function days(offset: number): Date {
 
 export interface HrDemoSummary {
   leaveTypes: number;
+  publicHolidays: number;
   employees: number;
   certifications: number;
   balances: number;
   leaveRequests: number;
 }
+
+/**
+ * The builders' shutdown.
+ *
+ * Not statutory, and the reason public holidays are rows rather than a
+ * calculation: construction closes between Christmas and New Year by
+ * agreement, and no algorithm knows that. Seeded so the demonstration shows a
+ * company day alongside the generated ones.
+ */
+const SHUTDOWN_DAYS: Array<[number, number, string]> = [
+  [12, 29, "Builders' shutdown"],
+  [12, 30, "Builders' shutdown"],
+  [12, 31, "Builders' shutdown"],
+];
 
 /**
  * Write the dataset into whichever tenant the caller has bound.
@@ -360,6 +376,7 @@ export async function seedHrDemo(params: {
   const { organisationId, userIds } = params;
   const summary: HrDemoSummary = {
     leaveTypes: 0,
+    publicHolidays: 0,
     employees: 0,
     certifications: 0,
     balances: 0,
@@ -393,6 +410,38 @@ export async function seedHrDemo(params: {
     });
     leaveTypeIds[spec.code] = created.id;
     summary.leaveTypes += 1;
+  }
+
+  // ---- Public holidays ----------------------------------------------------
+  // This year and next, because leave is booked across the boundary and a
+  // January request should not be counted as though January had no holidays.
+  const thisYear = new Date().getUTCFullYear();
+  for (const year of [thisYear, thisYear + 1]) {
+    const holidays = [
+      ...statutoryHolidays(year).map((holiday) => ({ ...holiday, isStatutory: true })),
+      ...SHUTDOWN_DAYS.map(([month, day, name]) => ({
+        observedOn: new Date(Date.UTC(year, month - 1, day)),
+        name,
+        isStatutory: false,
+      })),
+    ];
+
+    for (const holiday of holidays) {
+      const already = await db.publicHoliday.findFirst({
+        where: { observedOn: holiday.observedOn },
+      });
+      if (already) continue;
+
+      await db.publicHoliday.create({
+        data: {
+          organisationId,
+          observedOn: holiday.observedOn,
+          name: holiday.name,
+          isStatutory: holiday.isStatutory,
+        },
+      });
+      summary.publicHolidays += 1;
+    }
   }
 
   // ---- People -------------------------------------------------------------
