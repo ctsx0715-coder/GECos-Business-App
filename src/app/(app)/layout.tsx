@@ -333,9 +333,19 @@ export default async function AppLayout({
   }
 
   return (
-    <div className="min-h-dvh p-3 sm:p-5">
-      <div className="mx-auto grid max-w-[1400px] grid-cols-1 overflow-hidden rounded-[24px] bg-surface shadow-[0_8px_32px_rgba(0,0,0,0.06)] lg:grid-cols-[260px_minmax(0,1fr)]">
-        <aside className="flex flex-col gap-5 border-b border-border p-4 lg:border-b-0 lg:border-r">
+    /*
+      One page scroll became two.
+      
+      Below lg the sidebar sits above the content in one column, and a single
+      page scroll is the right thing — two scrolling boxes stacked on a phone
+      is how you lose the thing you were reading. From lg the shell is pinned
+      to the viewport and each pane scrolls on its own, so the navigation does
+      not slide away while you read a long register, and a long menu does not
+      drag the content with it.
+    */
+    <div className="min-h-dvh p-3 sm:p-5 lg:h-dvh">
+      <div className="mx-auto grid max-w-[1400px] grid-cols-1 overflow-hidden rounded-[24px] bg-surface shadow-[0_8px_32px_rgba(0,0,0,0.06)] lg:h-full lg:grid-cols-[260px_minmax(0,1fr)]">
+        <aside className="flex flex-col gap-5 border-b border-border p-4 lg:min-h-0 lg:border-b-0 lg:border-r">
           <Link
             href="/dashboard"
             className="flex items-center gap-2.5 rounded-lg px-1 py-1"
@@ -353,7 +363,15 @@ export default async function AppLayout({
             </span>
           </Link>
 
-          <SidebarNav groups={groups} />
+          {/*
+            Only this scrolls. The logo above it and the signed-in user below
+            are pinned, which is the point: knowing who you are signed in as
+            matters most on the screens long enough to scroll — and on a demo
+            where switching user is how the role gate is shown at all.
+          */}
+          <div className="scroll-area -mr-1 flex min-h-0 flex-1 flex-col pr-1">
+            <SidebarNav groups={groups} />
+          </div>
 
           <div className="flex items-center gap-2.5 rounded-[10px] border border-border bg-surface-muted p-2">
             <span className="relative grid size-8 shrink-0 place-items-center rounded-full bg-accent text-[11px] font-semibold text-accent-foreground">
@@ -381,8 +399,8 @@ export default async function AppLayout({
           </div>
         </aside>
 
-        <div className="flex min-w-0 flex-col">
-          <div className="flex h-14 items-center gap-3 border-b border-border px-5">
+        <div className="flex min-w-0 flex-col lg:min-h-0">
+          <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-5">
             <Breadcrumb
               organisation={organisation?.name ?? "Nopedi"}
               groups={groups}
@@ -393,7 +411,7 @@ export default async function AppLayout({
           </div>
 
           {demoAuthEnabled() && (
-            <p className="flex items-center gap-2 border-b border-border bg-surface-muted px-5 py-2 text-xs text-muted">
+            <p className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-muted px-5 py-2 text-xs text-muted">
               <Icon name="alert" className="text-warning" />
               <span>
                 <strong className="font-semibold text-foreground">
@@ -405,7 +423,9 @@ export default async function AppLayout({
             </p>
           )}
 
-          <main className="px-5 py-6 sm:px-6 sm:py-8">{children}</main>
+          <main className="scroll-area px-5 py-6 sm:px-6 sm:py-8 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+            {children}
+          </main>
         </div>
       </div>
     </div>

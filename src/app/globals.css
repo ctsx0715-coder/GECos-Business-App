@@ -132,3 +132,38 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * Scrolling panes.
+ *
+ * The shell has two of them side by side from lg up, and a pair of default
+ * scrollbars inside a rounded card is a lot of furniture for something nobody
+ * is looking at. Thin, in the border colour, and darker on hover so it is
+ * still findable. The gutter is reserved so content does not shift sideways
+ * when a list grows past the fold.
+ */
+.scroll-area {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-gutter: stable;
+}
+
+.scroll-area::-webkit-scrollbar {
+  width: 8px;
+}
+
+.scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-area::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+.scroll-area:hover::-webkit-scrollbar-thumb {
+  background-color: var(--muted);
+}
