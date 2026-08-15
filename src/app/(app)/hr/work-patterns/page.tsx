@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { withSession } from "@/lib/auth/session";
 import { hrService } from "@/modules/hr/hr.service";
 import { describePattern } from "@/modules/hr/work-patterns";
+import { describeShift } from "@/modules/hr/shifts";
 import { Badge, Card, CardHeader, EmptyState, PageHeader } from "@/components/ui";
 import { WorkPatternEditor, NewWorkPattern } from "./manage";
 
@@ -17,7 +18,13 @@ import { WorkPatternEditor, NewWorkPattern } from "./manage";
 export default async function WorkPatternsPage() {
   const data = await withSession(async (session) => {
     if (!session.permissions.has("hr.leave.configure")) return null;
-    return { patterns: await hrService.listWorkPatterns(true) };
+    return {
+      patterns: await hrService.listWorkPatterns(true),
+      shifts: (await hrService.listShifts()).map((shift) => ({
+        value: shift.id,
+        label: `${shift.name} (${describeShift(shift)})`,
+      })),
+    };
   });
 
   if (!data) redirect("/dashboard");
@@ -27,7 +34,7 @@ export default async function WorkPatternsPage() {
       <PageHeader
         title="Work patterns"
         description="The days each person is expected to work, and what leave is charged against"
-        action={<NewWorkPattern />}
+        action={<NewWorkPattern shifts={data.shifts} />}
       />
 
       <Card>
@@ -71,7 +78,9 @@ export default async function WorkPatternsPage() {
                         anchorOn: pattern.anchorOn,
                       })}
                       {" · "}
-                      {Number(pattern.hoursPerDay)} hours a day
+                      {pattern.shift
+                        ? `${pattern.shift.name} ${describeShift(pattern.shift)}`
+                        : `${Number(pattern.hoursPerDay)} hours a day`}
                     </span>
                   </span>
                   <span className="tabular shrink-0 text-sm text-muted">
@@ -83,8 +92,10 @@ export default async function WorkPatternsPage() {
                 </div>
 
                 <WorkPatternEditor
+                  shifts={data.shifts}
                   pattern={{
                     id: pattern.id,
+                    shiftId: pattern.shiftId ?? "",
                     code: pattern.code,
                     name: pattern.name,
                     description: pattern.description ?? "",

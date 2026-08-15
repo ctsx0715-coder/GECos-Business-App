@@ -166,6 +166,48 @@ export const removeCertificationSchema = z.object({
 });
 
 /**
+ * A shift: a named stretch of the day.
+ *
+ * Times are minutes from midnight, so a night shift that ends before it starts
+ * is not a contradiction — it is a shift that crosses midnight, which the form
+ * says out loud rather than rejecting.
+ */
+const shiftFields = {
+  name: z.string().trim().min(2, "Name the shift."),
+  description: z.string().trim().max(1000).optional(),
+  startsAtMinutes: z.number().int().min(0).max(1439),
+  endsAtMinutes: z.number().int().min(0).max(1439),
+  breakMinutes: z.number().int().min(0).max(480).default(0),
+  sortOrder: z.number().int().min(0).max(999).default(0),
+};
+
+export const createShiftSchema = z
+  .object({
+    code: z
+      .string()
+      .trim()
+      .min(2)
+      .max(20)
+      .regex(/^[A-Z0-9_]+$/, "Use capitals, digits and underscores."),
+    ...shiftFields,
+  })
+  .refine((data) => data.startsAtMinutes !== data.endsAtMinutes, {
+    message: "A shift that ends when it starts is zero hours long.",
+    path: ["endsAtMinutes"],
+  });
+
+export const updateShiftSchema = z
+  .object({
+    shiftId: z.uuid(),
+    ...shiftFields,
+    isActive: z.boolean().default(true),
+  })
+  .refine((data) => data.startsAtMinutes !== data.endsAtMinutes, {
+    message: "A shift that ends when it starts is zero hours long.",
+    path: ["endsAtMinutes"],
+  });
+
+/**
  * A working pattern.
  *
  * The indexes are validated against the cycle length rather than against a
@@ -183,6 +225,8 @@ const workPatternFields = {
     .array(z.number().int().min(0).max(55))
     .min(1, "Somebody has to work at least one day."),
   hoursPerDay: z.number().positive().max(24).default(8),
+  /** Null means the hours are not specified — an office pattern, typically. */
+  shiftId: z.uuid().nullable().optional(),
   isDefault: z.boolean().default(false),
 };
 

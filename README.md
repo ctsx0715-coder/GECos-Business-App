@@ -107,6 +107,19 @@ Not yet handled: the BCEA's rule that carried days expire six months into the
 new cycle. That needs a date the ledger does not record, so it is left undone
 rather than half-done.
 
+### Shifts
+
+A shift is a stretch of the day — days, nights, the Saturday half-day — kept
+apart from patterns on purpose. A pattern says *which days*; a shift says
+*which hours*. The same six-day pattern is worked on days by one crew and
+nights by another, and one table each keeps that from becoming a list of
+"six-day days", "six-day nights", "six-day afternoons".
+
+Times are minutes from midnight, because a shift is a time of day rather than
+a moment: 18:00 to 06:00 is an ordinary night shift that ends the following
+morning, which no pair of timestamps can express without a date attached. They
+live on **Work cycles → Shifts**, and attach to a work pattern.
+
 ### Work patterns
 
 Which days somebody works decides what a week of leave costs them. Monday to

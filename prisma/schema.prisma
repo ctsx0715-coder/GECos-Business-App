@@ -284,6 +284,7 @@ model Organisation {
   modules          OrganisationModule[]
   publicHolidays   PublicHoliday[]
   workPatterns     WorkPattern[]
+  shifts           Shift[]
   users            User[]
   roles            Role[]
   customers        Customer[]
@@ -1397,6 +1398,50 @@ model LeaveBalance {
   @@map("leave_balances")
 }
 
+/// A named stretch of the day: days, nights, the Saturday half-day.
+///
+/// Separate from the pattern on purpose. A pattern says *which days*; a shift
+/// says *which hours*. The same six-day pattern is worked on days by one crew
+/// and nights by another, and a rotation swaps the shift while the days stay
+/// put — one table each keeps that from becoming a combinatorial mess of
+/// "six-day days", "six-day nights", "six-day afternoons".
+///
+/// Times are minutes from midnight rather than DateTimes, because a shift is a
+/// time of day and not a moment: 18:00 means 18:00 on whichever date it is
+/// worked, in the tenant's timezone, which no timestamp can express.
+model Shift {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  code           String
+  name           String
+  description    String?
+
+  /// Minutes from midnight. 420 is 07:00.
+  startsAtMinutes Int
+  /// Minutes from midnight. When it is not after the start, the shift crosses
+  /// midnight and ends the following morning — which is what a night shift is.
+  endsAtMinutes   Int
+  /// Unpaid break, subtracted from the hours a shift is worth.
+  breakMinutes    Int @default(0)
+
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  patterns     WorkPattern[]
+
+  @@unique([organisationId, code])
+  @@index([organisationId])
+  @@map("shifts")
+}
+
 /// Which days somebody actually works.
 ///
 /// Monday to Friday was hard-coded until this existed, and it is wrong for
@@ -1428,6 +1473,10 @@ model WorkPattern {
   /// overtime will need it, and recording it now costs nothing.
   hoursPerDay Decimal @default(8) @db.Decimal(4, 2)
 
+  /// The shift worked on this pattern's days. Null means the hours are not
+  /// specified — true of an office pattern where nobody clocks in.
+  shiftId String? @db.Uuid
+
   /// The pattern used by anybody who has not been given one of their own.
   /// Exactly one per tenant, enforced by the service rather than the schema,
   /// because a partial unique index on a boolean is a poor trade for a rule
@@ -1443,6 +1492,7 @@ model WorkPattern {
   deletedAt    DateTime?    @db.Timestamptz(6)
 
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  shift        Shift?       @relation(fields: [shiftId], references: [id], onDelete: SetNull)
   employees    Employee[]
 
   @@unique([organisationId, code])

@@ -40,7 +40,7 @@ export const dynamic = "force-dynamic";
  * normal item. A demonstration screen that sits in the nav looking exactly
  * like a built one is how a client ends up believing they bought it.
  */
-type GroupKey = "main" | "insights" | "preview" | "support";
+type GroupKey = "main" | "cycles" | "insights" | "preview" | "support";
 
 interface NavItem {
   href: string;
@@ -160,8 +160,15 @@ const NAV: NavItem[] = [
     icon: "grid",
     moduleKey: "hr",
     permission: "hr.roster.view",
-    group: "main",
-    parent: PEOPLE,
+    group: "cycles",
+  },
+  {
+    href: "/hr/shifts",
+    label: "Shifts",
+    icon: "clock",
+    moduleKey: "hr",
+    permission: "hr.leave.configure",
+    group: "cycles",
   },
   {
     href: "/hr/work-patterns",
@@ -169,8 +176,7 @@ const NAV: NavItem[] = [
     icon: "clock",
     moduleKey: "hr",
     permission: "hr.leave.configure",
-    group: "main",
-    parent: PEOPLE,
+    group: "cycles",
   },
   {
     href: "/hr/leave/holidays",
@@ -178,8 +184,7 @@ const NAV: NavItem[] = [
     icon: "calendar",
     moduleKey: "hr",
     permission: "hr.leave.configure",
-    group: "main",
-    parent: PEOPLE,
+    group: "cycles",
   },
   {
     href: "/hr/leave/types",
@@ -226,6 +231,7 @@ const NAV: NavItem[] = [
 
 const GROUP_LABELS: Record<GroupKey, string> = {
   main: "Main navigation",
+  cycles: "Work cycles",
   insights: "Analytics & insights",
   preview: "Not built yet",
   support: "Support",
@@ -237,7 +243,7 @@ const GROUP_LABELS: Record<GroupKey, string> = {
  * disappears with them rather than becoming an empty disclosure.
  */
 function buildGroups(visible: NavItem[]): NavGroup[] {
-  return (["main", "insights", "preview", "support"] as GroupKey[])
+  return (["main", "cycles", "insights", "preview", "support"] as GroupKey[])
     .map((key) => {
       const items: NavGroup["items"] = [];
 
