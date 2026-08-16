@@ -212,6 +212,14 @@ const NAV: NavItem[] = [
     group: "insights",
   },
   {
+    href: "/approval-chains",
+    label: "Approval chains",
+    icon: "inbox",
+    moduleKey: "core",
+    permission: "core.workflow.view",
+    group: "support",
+  },
+  {
     href: "/audit",
     label: "Audit trail",
     icon: "history",
