@@ -475,3 +475,14 @@ export async function withdrawTimeApprovalAction(
   revalidatePath("/hr/timesheets");
   return result;
 }
+
+export async function updatePayrollPolicyAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.updatePayrollPolicy(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath("/hr/payroll");
+  return result;
+}

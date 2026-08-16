@@ -30,7 +30,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 528 tests against a real database
+pnpm test                   # 579 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -75,6 +75,14 @@ production is serving from — and when the same commit sits on two branches,
 both builds race for Prisma's advisory lock and one fails. Schema belongs to
 the production deploy. If previews ever get a database of their own, set
 `NOPEDI_MIGRATE_ON_PREVIEW=true` in the preview environment.
+
+> **That flag is currently set on this project's preview environment, and
+> previews still share the production database.** Every build now prints the
+> decision it took and the evidence for it, which is how this was found: a
+> preview build reported `Database writes allowed (preview-opt-in)` and applied
+> a migration to production minutes before the merge did. Until previews have a
+> database of their own, remove `NOPEDI_MIGRATE_ON_PREVIEW` from the Vercel
+> preview environment — the guard then does what the paragraph above describes.
 
 ## Leave
 
@@ -268,6 +276,64 @@ leaves both facts in the audit trail.
 An entry left running longer than anybody works is flagged rather than
 truncated. The system does not know what happened, and quietly rewriting
 somebody's hours to a number that suits it is worse than asking.
+
+### Payroll
+
+**Work cycles → Payroll** turns a period of signed-off timesheets into the
+thing a pay run needs: hours per person, split into what each is paid at.
+
+**There is no pay rate anywhere in this system, and there is no money on that
+screen.** The export carries hours per category and the multipliers the tenant
+has configured; the payroll package holds the rates and does the
+multiplication. That is deliberate twice over — salaries in a database that has
+not cleared the RLS and MFA gate would be the worst thing we could put in it,
+and every South African payroll package expects to be fed hours anyway.
+
+The split follows the BCEA by default, and every number in it is a row:
+
+| Category | Default |
+|---|---|
+| Ordinary | 9 hours a day on a five-day week, 8 on six, 45 in a week — whichever is reached first |
+| Overtime | Everything beyond that, ×1.5 |
+| Sunday | The whole day, ×2 |
+| Public holiday | The whole day, ×2 |
+
+Two of those are easy to get wrong and cost somebody money. A **Sunday is
+Sunday hours from the first minute**, not eight ordinary hours and three
+overtime — splitting it underpays the day. And the **weekly ceiling is applied
+after the daily one**: six eight-hour days is 48 hours without any single day
+breaking the daily limit, so three of them are overtime that a per-day rule
+alone would miss.
+
+Which ordinary day applies is read from the person's own pattern, so a six-day
+site worker starts earning overtime an hour earlier than the office does —
+which is the law, not a generosity.
+
+**Only signed-off time is counted.** An unapproved entry is not a smaller
+number, it is an unanswered question, and paying from one would make the
+sign-off ceremonial. What is left out is reported beside the total with its
+hours and whose it is, because "you are about to pay eleven hours short" is the
+one thing that screen must not bury.
+
+Overtime past what the BCEA allows — 3 hours in a day, 10 in a week — is
+**reported and still paid**. The hours were worked, and withholding them would
+be a worse breach than the one being flagged.
+
+Two exports, because they are for different readers and pretending one file
+can be both produces a spreadsheet nobody can read and a report no software
+can import:
+
+- **CSV**, in decimal hours — the one format VIP, Sage and SimplePay all take.
+- **PDF**, A4, with a signature block — the copy somebody signs and files.
+
+The PDF is drawn rather than rendered from HTML. Turning a page into a PDF
+means shipping a headless browser into a serverless function — tens of
+megabytes and a cold start measured in seconds — or laying it out by hand, and
+for a table with six columns the hand-drawn version has no runtime to go wrong.
+
+`hr.payroll.export` is its own permission: the finance manager who runs the pay
+run holds it without being able to open the employee register, and the
+supervisor who signs timesheets off does not.
 
 ### Coverage
 

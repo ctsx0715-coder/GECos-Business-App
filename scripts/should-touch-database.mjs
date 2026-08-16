@@ -31,12 +31,38 @@ export function shouldTouchDatabase() {
    * The escape hatch, for the day previews get a database of their own. Set
    * it in the Vercel project's preview environment and previews migrate that
    * database instead of skipping.
+   *
+   * It is only safe when the preview environment points at a database of its
+   * own. Set against a DATABASE_URL that is production's, it hands every
+   * preview build the schema production is serving from: an unmerged branch
+   * migrates it, two branches on one commit race the advisory lock, and the
+   * production deploy that follows finds nothing pending and reports success.
+   * That is not hypothetical — it is what happened here through six deploys,
+   * and only became visible once this decision was printed.
    */
   if (process.env.NOPEDI_MIGRATE_ON_PREVIEW === "true") {
     return { ok: true, reason: "preview-opt-in" };
   }
 
   return { ok: false, reason: "preview" };
+}
+
+/**
+ * The decision, in one line, printed on every build.
+ *
+ * The skip path always explained itself; the write path never did, so a build
+ * that migrated the wrong database looked identical to one that did the right
+ * thing. Both say what they decided and on what evidence.
+ */
+export function whyItDecided({ ok, reason }) {
+  const seen = [
+    `VERCEL_ENV=${process.env.VERCEL_ENV ?? "(unset)"}`,
+    `VERCEL=${process.env.VERCEL ?? "(unset)"}`,
+    `CI=${process.env.CI ?? "(unset)"}`,
+    `VERCEL_GIT_COMMIT_REF=${process.env.VERCEL_GIT_COMMIT_REF ?? "(unset)"}`,
+  ].join(" ");
+
+  return `  Database writes ${ok ? "allowed" : "skipped"} (${reason}). ${seen}`;
 }
 
 /** The message that explains a skip, so a quiet build is never a mystery. */

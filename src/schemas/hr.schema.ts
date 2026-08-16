@@ -400,6 +400,34 @@ export const approveTimeEntriesSchema = z.object({
   entryIds: z.array(z.uuid()).min(1, "Choose at least one entry."),
 });
 
+/**
+ * How this tenant splits hours for payroll.
+ *
+ * Every field is a policy the BCEA sets a floor under and a bargaining council
+ * agreement can raise. Minutes rather than hours because that is what the
+ * timesheet measures in, and rounding hours to minutes twice is how a half
+ * hour disappears.
+ */
+export const updatePayrollPolicySchema = z
+  .object({
+    ordinaryMinutesPerDayShortWeek: z.number().int().min(60).max(1440),
+    ordinaryMinutesPerDayLongWeek: z.number().int().min(60).max(1440),
+    ordinaryMinutesPerWeek: z.number().int().min(60).max(10080),
+    maxOvertimeMinutesPerDay: z.number().int().min(0).max(1440),
+    maxOvertimeMinutesPerWeek: z.number().int().min(0).max(10080),
+    overtimeMultiplier: z.number().min(1).max(5),
+    sundayMultiplier: z.number().min(1).max(5),
+    holidayMultiplier: z.number().min(1).max(5),
+  })
+  .refine(
+    (data) =>
+      data.ordinaryMinutesPerWeek >= data.ordinaryMinutesPerDayLongWeek,
+    {
+      message: "A week of ordinary hours cannot be shorter than a day of them.",
+      path: ["ordinaryMinutesPerWeek"],
+    },
+  );
+
 export const addHolidaySchema = z.object({
   observedOn: z.coerce.date(),
   name: z.string().trim().min(2, "Name the day."),
