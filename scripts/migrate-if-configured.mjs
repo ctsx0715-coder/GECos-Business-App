@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { shouldTouchDatabase, skipMessage } from "./should-touch-database.mjs";
+import {
+  shouldTouchDatabase,
+  skipMessage,
+  whyItDecided,
+} from "./should-touch-database.mjs";
 
 /**
  * Applies pending migrations before a deploy, when this build is the one that
@@ -19,6 +23,7 @@ import { shouldTouchDatabase, skipMessage } from "./should-touch-database.mjs";
  */
 
 const { ok, reason } = shouldTouchDatabase();
+console.log(whyItDecided({ ok, reason }));
 
 if (!ok) {
   console.warn(skipMessage(reason));

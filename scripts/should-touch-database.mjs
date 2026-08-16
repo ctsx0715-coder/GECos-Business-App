@@ -22,7 +22,15 @@ export function shouldTouchDatabase() {
 
   const environment = process.env.VERCEL_ENV;
 
-  // Not on Vercel at all — a developer's machine, or CI. Their database.
+  /*
+   * Not on Vercel at all — a developer's machine, or CI. Their database.
+   *
+   * VERCEL_ENV is only exposed when the project has system environment
+   * variables switched on. With it off, a preview build looks exactly like a
+   * laptop from in here and this branch is what let previews migrate
+   * production. `whyItDecided` reports the branch taken on every build so the
+   * mistake cannot be silent again.
+   */
   if (!environment) return { ok: true, reason: "local" };
 
   if (environment === "production") return { ok: true, reason: "production" };
@@ -37,6 +45,24 @@ export function shouldTouchDatabase() {
   }
 
   return { ok: false, reason: "preview" };
+}
+
+/**
+ * The decision, in one line, printed on every build.
+ *
+ * The skip path always explained itself; the write path never did, so a build
+ * that migrated the wrong database looked identical to one that did the right
+ * thing. Both say what they decided and on what evidence.
+ */
+export function whyItDecided({ ok, reason }) {
+  const seen = [
+    `VERCEL_ENV=${process.env.VERCEL_ENV ?? "(unset)"}`,
+    `VERCEL=${process.env.VERCEL ?? "(unset)"}`,
+    `CI=${process.env.CI ?? "(unset)"}`,
+    `VERCEL_GIT_COMMIT_REF=${process.env.VERCEL_GIT_COMMIT_REF ?? "(unset)"}`,
+  ].join(" ");
+
+  return `  Database writes ${ok ? "allowed" : "skipped"} (${reason}). ${seen}`;
 }
 
 /** The message that explains a skip, so a quiet build is never a mystery. */
