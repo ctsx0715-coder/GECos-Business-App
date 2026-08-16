@@ -16,7 +16,12 @@ import { z } from "zod";
  * service currently starts, and a chain that never runs is worse than no
  * chain — somebody will believe it is protecting them.
  */
-export const APPROVABLE_ENTITIES = ["TENDER", "EXPENSE", "PROJECT"] as const;
+export const APPROVABLE_ENTITIES = [
+  "TENDER",
+  "EXPENSE",
+  "PROJECT",
+  "LEAVE_REQUEST",
+] as const;
 
 export const createChainSchema = z.object({
   name: z.string().trim().min(3, "Name the chain."),

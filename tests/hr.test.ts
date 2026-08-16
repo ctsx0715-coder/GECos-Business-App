@@ -3,6 +3,7 @@ import { rawDb } from "@/lib/database/client";
 import { withRequestContext } from "@/lib/database/tenant-context";
 import { BusinessRuleError, ForbiddenError } from "@/lib/errors";
 import { hrService, workingDaysBetween } from "@/modules/hr/hr.service";
+import { workflowService } from "@/modules/workflows/workflow.service";
 import {
   resetDatabase,
   seedOrganisation,
@@ -400,6 +401,239 @@ describe("deciding leave", () => {
         hrService.decideLeave({ requestId: request.id, decision: "REJECTED" }),
       ),
     ).rejects.toThrow(/already been decided/);
+  });
+});
+
+/**
+ * Leave, once somebody has written down who signs it off.
+ *
+ * Holding `hr.leave.approve` says a person *can* approve leave. The chain says
+ * which requests reach them and in what order, and these are the tests that
+ * the second sentence is enforced rather than decorative — that one approver
+ * on a two-step chain settles nothing, that a rung addressed to a role is not
+ * anybody's to take, and that "the manager" means the employee's manager and
+ * not whoever happened to type the request in.
+ */
+describe("deciding leave through an approval chain", () => {
+  async function aLeaveChain(steps: Array<Record<string, unknown>>) {
+    const chain = await as("executive", () =>
+      workflowService.createChain({
+        name: "Leave approval",
+        entityType: "LEAVE_REQUEST",
+        triggerEvent: "leave.requested",
+      }),
+    );
+    for (const step of steps) {
+      await as("executive", () =>
+        workflowService.addStep({ chainId: chain.id, ...step }),
+      );
+    }
+    return chain;
+  }
+
+  /*
+   * Somebody who asks for their own leave, and who is neither rung of the
+   * chain. Both matter: an approver may not settle their own request, and may
+   * not settle one they filed for somebody else.
+   */
+  async function aRequest(overrides: Record<string, unknown> = {}) {
+    const employee = await anEmployee({
+      userId: org.userIds.employee,
+      ...overrides,
+    });
+    const type = await annualLeave(21);
+    await withBalance(employee.id, type.id, 21);
+    const request = await as("employee", () =>
+      hrService.requestLeave({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        startsAt: monday(4),
+        endsAt: plus(monday(4), 4),
+      }),
+    );
+    return { employee, type, request };
+  }
+
+  it("waits for every rung before the request is approved", async () => {
+    await aLeaveChain([
+      {
+        name: "Project manager",
+        approverType: "ROLE",
+        approverRoleId: org.roleIds.project_manager,
+      },
+      {
+        name: "HR",
+        approverType: "ROLE",
+        approverRoleId: org.roleIds.hr_manager,
+      },
+    ]);
+    const { request } = await aRequest();
+
+    // The first rung signs off, and the request has not moved.
+    const afterFirst = await as("project_manager", () =>
+      hrService.decideLeave({ requestId: request.id, decision: "APPROVED" }),
+    );
+    expect(afterFirst.status).toBe("SUBMITTED");
+
+    const afterSecond = await as("hr_manager", () =>
+      hrService.decideLeave({ requestId: request.id, decision: "APPROVED" }),
+    );
+    expect(afterSecond.status).toBe("APPROVED");
+  });
+
+  it("keeps the second rung waiting while the first is outstanding", async () => {
+    await aLeaveChain([
+      {
+        name: "Project manager",
+        approverType: "ROLE",
+        approverRoleId: org.roleIds.project_manager,
+      },
+      {
+        name: "HR",
+        approverType: "ROLE",
+        approverRoleId: org.roleIds.hr_manager,
+      },
+    ]);
+    const { request } = await aRequest();
+
+    /*
+     * The request is always offered at the rung it is actually sitting on, so
+     * somebody further up the ladder is refused for the plainer reason: this
+     * approval is not addressed to them yet. They are not told to wait, they
+     * are told it is not theirs — which is the same fact stated where it is
+     * useful.
+     */
+    await expect(
+      as("hr_manager", () =>
+        hrService.decideLeave({ requestId: request.id, decision: "APPROVED" }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+
+    const [still] = await as("hr_manager", () =>
+      hrService.listLeaveRequests({ status: ["SUBMITTED"] }),
+    );
+    expect(still.id).toBe(request.id);
+  });
+
+  it("refuses somebody who may approve leave but does not hold the rung", async () => {
+    await aLeaveChain([
+      {
+        name: "Project manager",
+        approverType: "ROLE",
+        approverRoleId: org.roleIds.project_manager,
+      },
+    ]);
+    const { request } = await aRequest();
+
+    // The HR manager may approve leave in general. This particular approval
+    // was addressed to somebody else, which is the entire point of a chain.
+    await expect(
+      as("hr_manager", () =>
+        hrService.decideLeave({ requestId: request.id, decision: "APPROVED" }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("ends the request and hands the days back when a rung rejects it", async () => {
+    await aLeaveChain([
+      {
+        name: "Project manager",
+        approverType: "ROLE",
+        approverRoleId: org.roleIds.project_manager,
+      },
+      {
+        name: "HR",
+        approverType: "ROLE",
+        approverRoleId: org.roleIds.hr_manager,
+      },
+    ]);
+    const { employee, request } = await aRequest();
+
+    const decided = await as("project_manager", () =>
+      hrService.decideLeave({ requestId: request.id, decision: "REJECTED" }),
+    );
+    expect(decided.status).toBe("REJECTED");
+
+    const balances = await as("hr_manager", () =>
+      hrService.balancesFor(employee.id),
+    );
+    expect(balances[0].remainingDays).toBe(21);
+  });
+
+  it("reads 'the manager' off the employee, not off whoever filed it", async () => {
+    await aLeaveChain([{ name: "Their manager", approverType: "MANAGER" }]);
+
+    const manager = await as("hr_manager", () =>
+      hrService.createEmployee({
+        firstName: "Zanele",
+        lastName: "Khoza",
+        jobTitle: "Project Manager",
+        startedAt: new Date("2024-01-01T00:00:00Z"),
+        userId: org.userIds.project_manager,
+      }),
+    );
+    // A boilermaker with no login, whose leave HR types in for him.
+    const employee = await anEmployee({ managerId: manager.id });
+    const type = await annualLeave(21);
+    await withBalance(employee.id, type.id, 21);
+
+    const request = await as("hr_manager", () =>
+      hrService.requestLeave({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        startsAt: monday(4),
+        endsAt: plus(monday(4), 4),
+      }),
+    );
+
+    const trail = await as("hr_manager", () => hrService.approvalTrail(request.id));
+    expect(trail?.steps[0].approver).toBe("Project Manager Test");
+
+    // And the HR manager, who filed it, is not the one it went to.
+    await expect(
+      as("hr_manager", () =>
+        hrService.decideLeave({ requestId: request.id, decision: "APPROVED" }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+
+    const decided = await as("project_manager", () =>
+      hrService.decideLeave({ requestId: request.id, decision: "APPROVED" }),
+    );
+    expect(decided.status).toBe("APPROVED");
+  });
+
+  it("only applies a rung whose condition the request meets", async () => {
+    await aLeaveChain([
+      {
+        name: "HR, for long absences only",
+        approverType: "ROLE",
+        approverRoleId: org.roleIds.hr_manager,
+        conditionField: "days",
+        conditionOperator: "GT",
+        conditionValue: "10",
+      },
+    ]);
+
+    // Five days: the only rung does not apply, so no chain starts and leave
+    // falls back to whoever may approve it.
+    const { request } = await aRequest();
+    const trail = await as("hr_manager", () => hrService.approvalTrail(request.id));
+    expect(trail).toBeNull();
+
+    const decided = await as("hr_manager", () =>
+      hrService.decideLeave({ requestId: request.id, decision: "APPROVED" }),
+    );
+    expect(decided.status).toBe("APPROVED");
+  });
+
+  it("leaves leave alone when nobody has configured a chain", async () => {
+    const { request } = await aRequest();
+    expect(await as("hr_manager", () => hrService.approvalTrail(request.id))).toBeNull();
+
+    const decided = await as("hr_manager", () =>
+      hrService.decideLeave({ requestId: request.id, decision: "APPROVED" }),
+    );
+    expect(decided.status).toBe("APPROVED");
   });
 });
 

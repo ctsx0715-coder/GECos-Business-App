@@ -446,6 +446,27 @@ export const WORK_PATTERNS: Array<{
   },
 ];
 
+/**
+ * Who reports to whom.
+ *
+ * Needed the moment leave has to reach "their manager": a chain that resolves
+ * to nobody falls back to whoever may approve leave, which is right as a
+ * fallback and useless as a demonstration. Anybody unlisted reports to the
+ * Managing Director, which is true of a company this size.
+ */
+const REPORTS_TO: Record<string, string> = {
+  "Anele Dlamini": "Zanele Khoza",
+  "Jacob Mthembu": "Zanele Khoza",
+  "Katlego Sebego": "Anele Dlamini",
+  "Nomsa Zulu": "Anele Dlamini",
+  "Pieter van Wyk": "Zanele Khoza",
+  "Sipho Ndlovu": "Bongani Sithole",
+  "Zanele Khoza": "Thato Chokoe",
+  "Bongani Sithole": "Thato Chokoe",
+  "Lerato Mokoena": "Thato Chokoe",
+  "Refilwe Molefe": "Thato Chokoe",
+};
+
 /** Who is on which pattern. Anybody unlisted is on the default. */
 const PATTERN_BY_PERSON: Record<string, string> = {
   "Anele Dlamini": "SITE_6DAY",
@@ -522,6 +543,8 @@ export interface HrDemoSummary {
   shifts: number;
   workPatterns: number;
   patternTurns: number;
+  reportingLines: number;
+  leaveApprovalSteps: number;
   leaveTypes: number;
   publicHolidays: number;
   rosterAssignments: number;
@@ -567,6 +590,8 @@ export async function seedHrDemo(params: {
     shifts: 0,
     workPatterns: 0,
     patternTurns: 0,
+    reportingLines: 0,
+    leaveApprovalSteps: 0,
     leaveTypes: 0,
     publicHolidays: 0,
     rosterAssignments: 0,
@@ -669,6 +694,63 @@ export async function seedHrDemo(params: {
     });
     leaveTypeIds[spec.code] = created.id;
     summary.leaveTypes += 1;
+  }
+
+  // ---- Who signs leave off ------------------------------------------------
+  /*
+   * A chain rather than a single approver, because "not everyone can just
+   * approve stuff" is the rule this demonstrates. Two rungs: the person's own
+   * manager always, and HR as well once the absence is long enough to matter
+   * to cover and to payroll. A day off does not need two signatures.
+   *
+   * Skipped entirely if a chain already runs on this trigger — the database
+   * refuses two, and somebody's own chain outranks the demonstration's.
+   */
+  const leaveChainExists = await db.workflowDefinition.findFirst({
+    where: { entityType: "LEAVE_REQUEST", triggerEvent: "leave.requested" },
+  });
+
+  if (!leaveChainExists) {
+    const hrRole = await db.role.findFirst({ where: { key: "hr_manager" } });
+
+    const chain = await db.workflowDefinition.create({
+      data: {
+        organisationId,
+        name: "Leave approval",
+        entityType: "LEAVE_REQUEST",
+        triggerEvent: "leave.requested",
+        isActive: true,
+      },
+    });
+
+    await db.workflowStep.create({
+      data: {
+        organisationId,
+        workflowDefinitionId: chain.id,
+        sortOrder: 0,
+        name: "Their manager",
+        approverType: "MANAGER",
+        slaHours: 48,
+      },
+    });
+
+    if (hrRole) {
+      await db.workflowStep.create({
+        data: {
+          organisationId,
+          workflowDefinitionId: chain.id,
+          sortOrder: 1,
+          name: "HR, for five days or more",
+          approverType: "ROLE",
+          approverRoleId: hrRole.id,
+          slaHours: 48,
+          conditionField: "days",
+          conditionOperator: "GTE",
+          conditionValue: "5",
+        },
+      });
+    }
+    summary.leaveApprovalSteps += hrRole ? 2 : 1;
   }
 
   // ---- Public holidays ----------------------------------------------------
@@ -810,6 +892,28 @@ export async function seedHrDemo(params: {
       });
       summary.certifications += 1;
     }
+  }
+
+  // ---- The reporting line -------------------------------------------------
+  // A second pass, because a manager has to exist before anybody can point at
+  // them. Only ever fills a blank: somebody who has been given a manager in
+  // the app keeps the one they were given.
+  for (const [name, managerName] of Object.entries(REPORTS_TO)) {
+    const employeeId = employeeIds[name];
+    const managerId = employeeIds[managerName];
+    if (!employeeId || !managerId) continue;
+
+    const employee = await db.employee.findUnique({
+      where: { id: employeeId },
+      select: { managerId: true },
+    });
+    if (employee?.managerId) continue;
+
+    await db.employee.update({
+      where: { id: employeeId },
+      data: { managerId },
+    });
+    summary.reportingLines += 1;
   }
 
   // ---- Turns on a pattern -------------------------------------------------

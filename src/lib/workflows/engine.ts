@@ -78,6 +78,7 @@ export function stepApplies(step: WorkflowStep, record: TriggerRecord): boolean 
 async function resolveApprover(
   step: WorkflowStep,
   requesterId: string | null,
+  managerUserId?: string | null,
 ): Promise<{ userId?: string; roleId?: string }> {
   switch (step.approverType) {
     case "USER":
@@ -85,6 +86,15 @@ async function resolveApprover(
     case "ROLE":
       return { roleId: step.approverRoleId ?? undefined };
     case "MANAGER": {
+      /*
+       * The caller may know better who "the manager" is. Leave is the case
+       * that forced this: the request is about an employee, who often has no
+       * login at all, and whose manager is recorded on the employee record
+       * rather than on whichever user typed the request in. Resolving it from
+       * the acting user would send a boilermaker's leave to the HR manager's
+       * manager, which is nobody's idea of the reporting line.
+       */
+      if (managerUserId !== undefined) return { userId: managerUserId ?? undefined };
       if (!requesterId) return {};
       const requester = await db.user.findUnique({
         where: { id: requesterId },
@@ -105,6 +115,12 @@ export async function startWorkflow(params: {
   entityId: string;
   triggerEvent: string;
   record: TriggerRecord;
+  /**
+   * Who a MANAGER step means, when the calling service knows. Omitted falls
+   * back to the acting user's manager; explicit null means there is nobody,
+   * and the step goes to whoever holds the domain permission.
+   */
+  managerUserId?: string | null;
 }) {
   const { organisationId, userId } = requireRequestContext();
 
@@ -140,7 +156,7 @@ export async function startWorkflow(params: {
   // visible to the requester from the moment they submit. Only the first is
   // actionable; the rest wait their turn.
   for (const [index, step] of applicable.entries()) {
-    const approver = await resolveApprover(step, userId);
+    const approver = await resolveApprover(step, userId, params.managerUserId);
     const dueAt = step.slaHours
       ? new Date(Date.now() + step.slaHours * 3600_000)
       : null;
@@ -168,6 +184,63 @@ export async function currentApproval(instanceId: string) {
     where: { workflowInstanceId: instanceId, status: "PENDING" },
     orderBy: { sortOrder: "asc" },
   });
+}
+
+/**
+ * The approval one record is waiting on, or null when it is waiting on none.
+ *
+ * A service calls this to find out whether its own permission check is the
+ * whole story. Null means no chain was configured for the trigger, or the
+ * chain has already finished — both of which leave the decision where it was
+ * before approvals existed.
+ */
+export async function pendingApprovalFor(
+  entityType: EntityType,
+  entityId: string,
+) {
+  const instance = await db.workflowInstance.findFirst({
+    where: { entityType, entityId, status: "PENDING" },
+    orderBy: { startedAt: "desc" },
+    select: { id: true, startedById: true },
+  });
+  if (!instance) return null;
+
+  const approval = await currentApproval(instance.id);
+  if (!approval) return null;
+
+  return { ...approval, instanceStartedById: instance.startedById };
+}
+
+/**
+ * Every rung of a record's chain, decided and undecided, in order.
+ *
+ * The whole ladder rather than the current step, because the requester is owed
+ * the answer to "who else has to see this before I know" — and a screen that
+ * only ever shows the next name makes an approval look like a queue of one.
+ */
+export async function approvalTrailFor(
+  entityType: EntityType,
+  entityId: string,
+) {
+  const instance = await db.workflowInstance.findFirst({
+    where: { entityType, entityId },
+    orderBy: { startedAt: "desc" },
+    select: { id: true, status: true },
+  });
+  if (!instance) return null;
+
+  const approvals = await db.workflowApproval.findMany({
+    where: { workflowInstanceId: instance.id },
+    orderBy: { sortOrder: "asc" },
+    include: {
+      step: { select: { name: true, approverType: true } },
+      assignedToUser: { select: { firstName: true, lastName: true } },
+      assignedToRole: { select: { name: true } },
+      decidedBy: { select: { firstName: true, lastName: true } },
+    },
+  });
+
+  return { status: instance.status, approvals };
 }
 
 export interface DecisionResult {
@@ -213,6 +286,26 @@ export async function decide(params: {
 
   if (approval.assignedToUserId && approval.assignedToUserId !== userId) {
     throw new ForbiddenError("That approval is assigned to someone else.");
+  }
+
+  /*
+   * A step assigned to a role means whoever holds that job, and nobody else.
+   *
+   * Until this check existed the role was decoration: the engine only enforced
+   * a named user, so any holder of the domain permission could sign off a step
+   * addressed to the Finance Manager — which makes "not everyone can approve
+   * this" a claim the software did not keep. Somebody senior who disagrees with
+   * the chain can change the chain; that is what the screen is for, and it
+   * leaves a record.
+   */
+  if (approval.assignedToRoleId) {
+    const holdsRole = await db.userRole.findFirst({
+      where: { userId: userId ?? "", roleId: approval.assignedToRoleId },
+      select: { userId: true },
+    });
+    if (!holdsRole) {
+      throw new ForbiddenError("That approval is assigned to another role.");
+    }
   }
 
   await params.canDecide?.(approval);

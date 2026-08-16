@@ -1,4 +1,10 @@
 import { nextReference } from "@/lib/database/reference-numbers";
+import {
+  approvalTrailFor,
+  decide,
+  pendingApprovalFor,
+  startWorkflow,
+} from "@/lib/workflows/engine";
 import { requireRequestContext } from "@/lib/database/tenant-context";
 import { BusinessRuleError, ForbiddenError, NotFoundError } from "@/lib/errors";
 import { requirePermission, hasPermission } from "@/lib/permissions";
@@ -1267,6 +1273,54 @@ export const hrService = {
   },
 
   /**
+   * Who still has to sign one request off, and who already has.
+   *
+   * Null when no chain was configured for leave, which is how the whole
+   * feature stays optional: the screens fall back to "one approver decides",
+   * because that is what actually happens without a chain.
+   */
+  async approvalTrail(requestId: string) {
+    const request = await hrRepository.findLeaveRequest(requestId);
+    if (!request) throw new NotFoundError("Leave request");
+    await this.assertMaySeeEmployee(request.employeeId);
+
+    const trail = await approvalTrailFor("LEAVE_REQUEST", requestId);
+    if (!trail) return null;
+
+    const { userId } = requireRequestContext();
+    const myRoles = await hrRepository.roleIdsOf(userId);
+
+    return {
+      status: trail.status,
+      steps: trail.approvals.map((approval) => ({
+        id: approval.id,
+        name: approval.step.name,
+        status: approval.status,
+        approver:
+          approval.assignedToUser
+            ? `${approval.assignedToUser.firstName} ${approval.assignedToUser.lastName}`
+            : (approval.assignedToRole?.name ??
+              (approval.step.approverType === "MANAGER"
+                ? "Their manager — nobody on record"
+                : "Anybody who may approve leave")),
+        decidedBy: approval.decidedBy
+          ? `${approval.decidedBy.firstName} ${approval.decidedBy.lastName}`
+          : null,
+        decidedAt: approval.decidedAt,
+        comment: approval.comment,
+        /** Whether this rung is the signed-in person's to decide. */
+        isMine:
+          approval.status === "PENDING" &&
+          (approval.assignedToUserId === userId ||
+            (approval.assignedToRoleId !== null &&
+              myRoles.includes(approval.assignedToRoleId)) ||
+            (approval.assignedToUserId === null &&
+              approval.assignedToRoleId === null)),
+      })),
+    };
+  },
+
+  /**
    * Submitting a leave request.
    *
    * The balance is spent at submission rather than at approval. Checking only
@@ -1357,7 +1411,7 @@ export const hrService = {
       await hrRepository.addTakenDays(balance.id, days);
     }
 
-    return hrRepository.createLeaveRequest({
+    const request = await hrRepository.createLeaveRequest({
       reference: await nextReference("LV"),
       employeeId: data.employeeId,
       leaveTypeId: data.leaveTypeId,
@@ -1366,6 +1420,37 @@ export const hrService = {
       days,
       reason: data.reason,
     });
+
+    /*
+     * Who has to sign this off is configuration, not code (ADR-006). With no
+     * chain configured nothing starts and the request is decided by anybody
+     * holding `hr.leave.approve` — which is where leave was before, and is a
+     * perfectly good answer for a small company.
+     *
+     * The manager is resolved from the *employee's* reporting line rather than
+     * from whoever typed the request in. Most of a construction payroll has no
+     * login, so their leave is filed by HR, and reading the manager off the
+     * acting user would send a boilermaker's leave to the HR manager's manager.
+     */
+    const manager = employee.managerId
+      ? await hrRepository.findEmployee(employee.managerId)
+      : null;
+
+    await startWorkflow({
+      entityType: "LEAVE_REQUEST",
+      entityId: request.id,
+      triggerEvent: "leave.requested",
+      managerUserId: manager?.userId ?? null,
+      // What a chain can put a condition on: long absences can need a rung
+      // that a day off does not.
+      record: {
+        days,
+        leaveTypeCode: leaveType.code,
+        isPaid: String(leaveType.isPaid),
+      },
+    });
+
+    return request;
   },
 
   /**
@@ -1392,6 +1477,40 @@ export const hrService = {
     }
 
     const { userId } = requireRequestContext();
+
+    /*
+     * The chain, if the tenant has configured one.
+     *
+     * Holding `hr.leave.approve` says a person *can* approve leave; the chain
+     * says *which* approvals reach them and in what order. So the permission
+     * check above is necessary and, once a chain exists, not sufficient — the
+     * engine also insists the decision belongs to this person or their role,
+     * and that no earlier rung is still outstanding.
+     *
+     * A first approval on a two-step chain decides nothing about the request
+     * itself. It stays SUBMITTED and waits, which is the difference between a
+     * hierarchy and a queue of people who can each end it.
+     */
+    const approval = await pendingApprovalFor("LEAVE_REQUEST", request.id);
+
+    if (approval) {
+      const outcome = await decide({
+        approvalId: approval.id,
+        decision: data.decision,
+        comment: data.comment,
+        canDecide: async () => {
+          if (approval.instanceStartedById === userId) {
+            throw new ForbiddenError(
+              "You cannot approve a leave request you submitted.",
+            );
+          }
+        },
+      });
+
+      // Signed off at this rung, and still waiting at the next. Nothing about
+      // the request itself changes — that is what "hierarchy" means.
+      if (!outcome.isFinal) return request;
+    }
 
     // A rejection hands the days back; an approval has already spent them.
     if (data.decision === "REJECTED" && request.leaveType.daysPerCycle !== null) {

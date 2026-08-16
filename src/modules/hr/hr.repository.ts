@@ -597,4 +597,14 @@ export const hrRepository = {
   updateLeaveRequest(id: string, data: Prisma.LeaveRequestUncheckedUpdateInput) {
     return db.leaveRequest.update({ where: { id }, data });
   },
+
+  /** The roles one person holds, for deciding whose rung an approval is. */
+  async roleIdsOf(userId: string | null) {
+    if (!userId) return [];
+    const links = await db.userRole.findMany({
+      where: { userId },
+      select: { roleId: true },
+    });
+    return links.map((link) => link.roleId);
+  },
 };

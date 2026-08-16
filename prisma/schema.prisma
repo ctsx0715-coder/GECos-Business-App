@@ -46,6 +46,7 @@ enum EntityType {
   ASSET
   SUPPLIER
   EXPENSE
+  LEAVE_REQUEST
 }
 
 enum TenderStatus {

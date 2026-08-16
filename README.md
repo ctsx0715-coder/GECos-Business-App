@@ -30,7 +30,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 438 tests against a real database
+pnpm test                   # 445 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -237,6 +237,37 @@ steps — the engine finds nothing applicable and the record sails through, whic
 is worse than an obviously inactive chain. And two chains may not share a
 trigger, because the engine takes the first it finds and the second would be a
 rule somebody wrote and nobody applies.
+
+A rung addressed to a role is now enforced as one. Until leave went through the
+engine only a named user was checked, so any holder of the domain permission
+could sign off a step addressed to the Finance Manager — which makes "not
+everybody can approve this" a claim the software did not keep. Somebody senior
+who disagrees with a chain can change the chain, which is what the screen is
+for and leaves a record.
+
+### Leave, through the chain
+
+Leave used to be decided by anybody holding `hr.leave.approve`. It now runs on
+the same engine as everything else, triggered by `leave.requested`, and the
+demo chain is the arrangement most small contractors actually use: **their
+manager always, and HR as well once the absence reaches five days.** A day off
+does not need two signatures.
+
+Three things follow, and each is a test:
+
+- One approver on a two-rung chain settles nothing. The request stays
+  submitted until the last rung signs, which is the difference between a
+  hierarchy and a queue of people who can each end it.
+- A rejection anywhere ends it and hands the days back.
+- **The manager** means the *employee's* manager, read off the employee record
+  rather than off whoever typed the request in. Most of a construction payroll
+  has no login and their leave is filed by HR — resolving it from the acting
+  user would send a boilermaker's leave to the HR manager's manager.
+
+With no chain configured, nothing starts and leave is decided exactly as it was
+before. That is not a fallback nobody meant: for a company of fifteen people,
+one approver is the right answer, and the ladder should not appear until
+somebody asks for it.
 
 ## Architecture in one page
 
