@@ -38,14 +38,80 @@ const STATUS_ICONS: Record<string, "clock" | "check" | "ban"> = {
   CANCELLED: "ban",
 };
 
+/**
+ * The rungs one request still has to climb.
+ *
+ * Shown only when a chain is configured. Without one, leave is decided by
+ * whoever holds the permission and there is no ladder to draw — which is how
+ * the feature stays optional rather than becoming ceremony for a company of
+ * fifteen people.
+ */
+function ApprovalLadder({
+  steps,
+}: {
+  steps: Array<{
+    id: string;
+    name: string;
+    status: string;
+    approver: string;
+    decidedBy: string | null;
+    isMine: boolean;
+  }>;
+}) {
+  // The rung the request is actually sitting on. Everything before it has
+  // been decided; everything after it is waiting its turn.
+  const current = steps.findIndex((step) => step.status === "PENDING");
+
+  return (
+    <ol className="mt-2 space-y-1 border-l border-border pl-3">
+      {steps.map((step, index) => (
+        <li key={step.id} className="text-xs">
+          <span className={index === current ? "" : "text-faint"}>
+            <span className="tabular">{index + 1}.</span> {step.name} —{" "}
+            {step.decidedBy ?? step.approver}
+          </span>
+          {step.status !== "PENDING" ? (
+            <span className="ml-1.5 text-faint">· {step.status.toLowerCase()}</span>
+          ) : index === current ? (
+            <span className="ml-1.5 text-warning">
+              {step.isMine ? "· yours to decide" : "· waiting"}
+            </span>
+          ) : (
+            <span className="ml-1.5 text-faint">· then</span>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export default async function LeavePage() {
-  const { requests, summary, canApprove, canRequest } = await withSession(
-    async (session) => ({
-      canApprove: session.permissions.has("hr.leave.approve"),
-      canRequest: session.permissions.has("hr.leave.request"),
-      summary: await leaveSummary(),
-      requests: await hrService.listLeaveRequests(),
-    }),
+  const { requests, summary, canApprove, canRequest, ladders } = await withSession(
+    async (session) => {
+      const requests = await hrService.listLeaveRequests();
+      const waiting = requests.filter((request) => request.status === "SUBMITTED");
+
+      /*
+       * One query set per pending request. The list is short by construction —
+       * these are the rows somebody has to act on today — and the alternative
+       * is a join that would make every other leave screen carry approval
+       * plumbing it does not use.
+       */
+      const trails = await Promise.all(
+        waiting.map(async (request) => [
+          request.id,
+          await hrService.approvalTrail(request.id),
+        ] as const),
+      );
+
+      return {
+        canApprove: session.permissions.has("hr.leave.approve"),
+        canRequest: session.permissions.has("hr.leave.request"),
+        summary: await leaveSummary(),
+        requests,
+        ladders: new Map(trails),
+      };
+    },
   );
 
   const pending = requests.filter((r) => r.status === "SUBMITTED");
@@ -143,6 +209,9 @@ export default async function LeavePage() {
                   </span>
                   {canApprove && <LeaveDecision requestId={request.id} />}
                 </div>
+                {(ladders.get(request.id)?.steps.length ?? 0) > 0 && (
+                  <ApprovalLadder steps={ladders.get(request.id)!.steps} />
+                )}
               </li>
             ))}
           </ul>

@@ -22,6 +22,7 @@ const ENTITY_LABELS: Record<string, string> = {
   TENDER: "Tenders",
   EXPENSE: "Project expenses",
   PROJECT: "Projects",
+  LEAVE_REQUEST: "Leave requests",
 };
 
 const APPROVER_LABELS: Record<string, string> = {
@@ -142,7 +143,12 @@ export default async function ApprovalChainsPage() {
             )}
 
             {data.mayManage && (
-              <AddStep chainId={chain.id} roles={roles} users={users} />
+              <AddStep
+                chainId={chain.id}
+                entityType={chain.entityType}
+                roles={roles}
+                users={users}
+              />
             )}
           </Card>
         ))

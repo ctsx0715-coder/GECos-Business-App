@@ -400,6 +400,8 @@ export const WORK_PATTERNS: Array<{
   cycleDays: number;
   workingDayIndexes: number[];
   hoursPerDay: number;
+  rotationWeeks: number | null;
+  maxConsecutiveTurns: number | null;
   isDefault: boolean;
 }> = [
   {
@@ -409,6 +411,11 @@ export const WORK_PATTERNS: Array<{
     cycleDays: 7,
     workingDayIndexes: [0, 1, 2, 3, 4],
     hoursPerDay: 8,
+    // Nobody rotates off the office week, and nobody is hard done by being on
+    // it — which is why the fairness watch has to be able to leave a pattern
+    // alone. A warning that fires on everybody is one nobody reads.
+    rotationWeeks: null,
+    maxConsecutiveTurns: null,
     isDefault: true,
   },
   {
@@ -419,6 +426,8 @@ export const WORK_PATTERNS: Array<{
     cycleDays: 7,
     workingDayIndexes: [0, 1, 2, 3, 4, 5],
     hoursPerDay: 9,
+    rotationWeeks: 4,
+    maxConsecutiveTurns: 4,
     isDefault: false,
   },
   {
@@ -429,9 +438,34 @@ export const WORK_PATTERNS: Array<{
     cycleDays: 21,
     workingDayIndexes: Array.from({ length: 14 }, (_, index) => index),
     hoursPerDay: 10,
+    // Three weeks is one turn of the cycle, and three of those in a row on
+    // nights is where somebody should be asked whether it is still fair.
+    rotationWeeks: 3,
+    maxConsecutiveTurns: 3,
     isDefault: false,
   },
 ];
+
+/**
+ * Who reports to whom.
+ *
+ * Needed the moment leave has to reach "their manager": a chain that resolves
+ * to nobody falls back to whoever may approve leave, which is right as a
+ * fallback and useless as a demonstration. Anybody unlisted reports to the
+ * Managing Director, which is true of a company this size.
+ */
+const REPORTS_TO: Record<string, string> = {
+  "Anele Dlamini": "Zanele Khoza",
+  "Jacob Mthembu": "Zanele Khoza",
+  "Katlego Sebego": "Anele Dlamini",
+  "Nomsa Zulu": "Anele Dlamini",
+  "Pieter van Wyk": "Zanele Khoza",
+  "Sipho Ndlovu": "Bongani Sithole",
+  "Zanele Khoza": "Thato Chokoe",
+  "Bongani Sithole": "Thato Chokoe",
+  "Lerato Mokoena": "Thato Chokoe",
+  "Refilwe Molefe": "Thato Chokoe",
+};
 
 /** Who is on which pattern. Anybody unlisted is on the default. */
 const PATTERN_BY_PERSON: Record<string, string> = {
@@ -441,6 +475,152 @@ const PATTERN_BY_PERSON: Record<string, string> = {
   "Nomsa Zulu": "SITE_6DAY",
   "Pieter van Wyk": "ROTATION_14_7",
 };
+
+/**
+ * Turns already worked, so the fairness watch has a history to read.
+ *
+ * Pieter has had the night rotation three times running, which is exactly the
+ * limit the pattern sets — the demonstration should open with the system
+ * saying something, because a fairness rule nobody ever sees fire is a claim
+ * rather than a feature. Katlego has a turn written for a fortnight's time and
+ * not yet in force, which is the other half: a rotation is decided before it
+ * starts.
+ */
+const TURNS: Array<{
+  who: string;
+  pattern: string;
+  shift?: string;
+  startsInDays: number;
+  endsInDays: number | null;
+  applied: boolean;
+  note?: string;
+}> = [
+  { who: "Pieter van Wyk", pattern: "ROTATION_14_7", startsInDays: -63, endsInDays: -43, applied: true },
+  { who: "Pieter van Wyk", pattern: "ROTATION_14_7", startsInDays: -42, endsInDays: -22, applied: true },
+  {
+    who: "Pieter van Wyk",
+    pattern: "ROTATION_14_7",
+    startsInDays: -21,
+    endsInDays: -1,
+    applied: true,
+    note: "Third turn running — nobody else is ticketed for the excavator",
+  },
+  { who: "Anele Dlamini", pattern: "SITE_6DAY", startsInDays: -56, endsInDays: -29, applied: true },
+  { who: "Anele Dlamini", pattern: "SITE_6DAY", startsInDays: -28, endsInDays: null, applied: true },
+  { who: "Jacob Mthembu", pattern: "SITE_6DAY", startsInDays: -28, endsInDays: null, applied: true },
+  { who: "Nomsa Zulu", pattern: "SITE_6DAY", startsInDays: -14, endsInDays: null, applied: true },
+  {
+    who: "Katlego Sebego",
+    pattern: "ROTATION_14_7",
+    shift: "NIGHT",
+    startsInDays: 14,
+    endsInDays: 34,
+    applied: false,
+    note: "Taking the night rotation off Pieter",
+  },
+];
+
+/**
+ * Time actually worked, so the timesheet opens with a week on it.
+ *
+ * Four shapes, because they are the four the screen has to tell apart: an
+ * ordinary day signed off, a long day still waiting for a signature, a night
+ * shift that ends the following morning, and somebody who is on the clock
+ * right now. Hours relative to today, so a demonstration in March is not
+ * looking at an empty week from November.
+ */
+const TIME_ENTRIES: Array<{
+  who: string;
+  startedDaysAgo: number;
+  startsAtHour: number;
+  /** Hours on the clock. Null means they have not clocked out. */
+  hours: number | null;
+  breakMinutes: number;
+  approved: boolean;
+  note?: string;
+}> = [
+  {
+    who: "Jacob Mthembu",
+    startedDaysAgo: 3,
+    startsAtHour: 7,
+    hours: 9,
+    breakMinutes: 60,
+    approved: true,
+  },
+  {
+    who: "Jacob Mthembu",
+    startedDaysAgo: 2,
+    startsAtHour: 7,
+    hours: 9,
+    breakMinutes: 60,
+    approved: true,
+  },
+  {
+    who: "Anele Dlamini",
+    startedDaysAgo: 1,
+    startsAtHour: 7,
+    hours: 11,
+    breakMinutes: 60,
+    approved: false,
+    note: "Concrete pour ran late",
+  },
+  {
+    who: "Pieter van Wyk",
+    startedDaysAgo: 2,
+    startsAtHour: 18,
+    hours: 12,
+    breakMinutes: 60,
+    approved: false,
+  },
+  {
+    who: "Katlego Sebego",
+    startedDaysAgo: 0,
+    startsAtHour: -3,
+    hours: null,
+    breakMinutes: 0,
+    approved: false,
+  },
+];
+
+/**
+ * How many people each thing needs.
+ *
+ * Three shapes on purpose, because one form covers all of them and the point
+ * of the screen is lost if every rule looks alike: a site with a floor and a
+ * ceiling, a trade with neither, and a shift that needs one person on it every
+ * single day including Sunday.
+ */
+const STAFFING_RULES: Array<{
+  name: string;
+  onSite: boolean;
+  department?: string;
+  shift?: string;
+  weekdays: number[];
+  minimumPeople: number;
+  maximumPeople?: number;
+}> = [
+  {
+    name: "Site crew — day shift",
+    onSite: true,
+    weekdays: [0, 1, 2, 3, 4, 5],
+    minimumPeople: 3,
+    maximumPeople: 5,
+  },
+  {
+    name: "Workshop",
+    onSite: false,
+    department: "Workshop",
+    weekdays: [0, 1, 2, 3, 4],
+    minimumPeople: 1,
+  },
+  {
+    name: "Plant on nights",
+    onSite: false,
+    shift: "NIGHT",
+    weekdays: [],
+    minimumPeople: 1,
+  },
+];
 
 /**
  * A week of placements, so the roster opens with something on it.
@@ -464,6 +644,11 @@ const ROSTER: Array<{
 export interface HrDemoSummary {
   shifts: number;
   workPatterns: number;
+  patternTurns: number;
+  reportingLines: number;
+  leaveApprovalSteps: number;
+  staffingRules: number;
+  timeEntries: number;
   leaveTypes: number;
   publicHolidays: number;
   rosterAssignments: number;
@@ -508,6 +693,11 @@ export async function seedHrDemo(params: {
   const summary: HrDemoSummary = {
     shifts: 0,
     workPatterns: 0,
+    patternTurns: 0,
+    reportingLines: 0,
+    leaveApprovalSteps: 0,
+    staffingRules: 0,
+    timeEntries: 0,
     leaveTypes: 0,
     publicHolidays: 0,
     rosterAssignments: 0,
@@ -545,10 +735,19 @@ export async function seedHrDemo(params: {
        * makes: the pattern is not changed, it is completed.
        */
       const shiftId = shiftIds[SHIFT_BY_PATTERN[spec.code]];
-      if (shiftId && !existing.shiftId) {
+      if (
+        (shiftId && !existing.shiftId) ||
+        (spec.rotationWeeks !== null && existing.rotationWeeks === null) ||
+        (spec.maxConsecutiveTurns !== null && existing.maxConsecutiveTurns === null)
+      ) {
         await db.workPattern.update({
           where: { id: existing.id },
-          data: { shiftId },
+          data: {
+            shiftId: existing.shiftId ?? shiftId ?? null,
+            rotationWeeks: existing.rotationWeeks ?? spec.rotationWeeks,
+            maxConsecutiveTurns:
+              existing.maxConsecutiveTurns ?? spec.maxConsecutiveTurns,
+          },
         });
       }
       continue;
@@ -565,6 +764,8 @@ export async function seedHrDemo(params: {
         anchorOn: PATTERN_ANCHOR,
         hoursPerDay: spec.hoursPerDay,
         shiftId: shiftIds[SHIFT_BY_PATTERN[spec.code]] ?? null,
+        rotationWeeks: spec.rotationWeeks,
+        maxConsecutiveTurns: spec.maxConsecutiveTurns,
         isDefault: spec.isDefault,
       },
     });
@@ -599,6 +800,63 @@ export async function seedHrDemo(params: {
     });
     leaveTypeIds[spec.code] = created.id;
     summary.leaveTypes += 1;
+  }
+
+  // ---- Who signs leave off ------------------------------------------------
+  /*
+   * A chain rather than a single approver, because "not everyone can just
+   * approve stuff" is the rule this demonstrates. Two rungs: the person's own
+   * manager always, and HR as well once the absence is long enough to matter
+   * to cover and to payroll. A day off does not need two signatures.
+   *
+   * Skipped entirely if a chain already runs on this trigger — the database
+   * refuses two, and somebody's own chain outranks the demonstration's.
+   */
+  const leaveChainExists = await db.workflowDefinition.findFirst({
+    where: { entityType: "LEAVE_REQUEST", triggerEvent: "leave.requested" },
+  });
+
+  if (!leaveChainExists) {
+    const hrRole = await db.role.findFirst({ where: { key: "hr_manager" } });
+
+    const chain = await db.workflowDefinition.create({
+      data: {
+        organisationId,
+        name: "Leave approval",
+        entityType: "LEAVE_REQUEST",
+        triggerEvent: "leave.requested",
+        isActive: true,
+      },
+    });
+
+    await db.workflowStep.create({
+      data: {
+        organisationId,
+        workflowDefinitionId: chain.id,
+        sortOrder: 0,
+        name: "Their manager",
+        approverType: "MANAGER",
+        slaHours: 48,
+      },
+    });
+
+    if (hrRole) {
+      await db.workflowStep.create({
+        data: {
+          organisationId,
+          workflowDefinitionId: chain.id,
+          sortOrder: 1,
+          name: "HR, for five days or more",
+          approverType: "ROLE",
+          approverRoleId: hrRole.id,
+          slaHours: 48,
+          conditionField: "days",
+          conditionOperator: "GTE",
+          conditionValue: "5",
+        },
+      });
+    }
+    summary.leaveApprovalSteps += hrRole ? 2 : 1;
   }
 
   // ---- Public holidays ----------------------------------------------------
@@ -742,6 +1000,59 @@ export async function seedHrDemo(params: {
     }
   }
 
+  // ---- The reporting line -------------------------------------------------
+  // A second pass, because a manager has to exist before anybody can point at
+  // them. Only ever fills a blank: somebody who has been given a manager in
+  // the app keeps the one they were given.
+  for (const [name, managerName] of Object.entries(REPORTS_TO)) {
+    const employeeId = employeeIds[name];
+    const managerId = employeeIds[managerName];
+    if (!employeeId || !managerId) continue;
+
+    const employee = await db.employee.findUnique({
+      where: { id: employeeId },
+      select: { managerId: true },
+    });
+    if (employee?.managerId) continue;
+
+    await db.employee.update({
+      where: { id: employeeId },
+      data: { managerId },
+    });
+    summary.reportingLines += 1;
+  }
+
+  // ---- Turns on a pattern -------------------------------------------------
+  // The history the fairness watch reads. Employees already point at the
+  // pattern they are on; these rows say since when, and how many times round
+  // it has come to the same person.
+  for (const spec of TURNS) {
+    const employeeId = employeeIds[spec.who];
+    const workPatternId = patternIds[spec.pattern];
+    if (!employeeId || !workPatternId) continue;
+
+    const already = await db.patternAssignment.findFirst({
+      where: { employeeId, startsOn: days(spec.startsInDays) },
+    });
+    if (already) continue;
+
+    await db.patternAssignment.create({
+      data: {
+        organisationId,
+        employeeId,
+        workPatternId,
+        shiftId: spec.shift ? (shiftIds[spec.shift] ?? null) : null,
+        startsOn: days(spec.startsInDays),
+        endsOn: spec.endsInDays === null ? null : days(spec.endsInDays),
+        // A turn that has taken effect is one the employee record already
+        // reflects; one that has not is waiting for the day to arrive.
+        appliedAt: spec.applied ? days(spec.startsInDays) : null,
+        note: spec.note,
+      },
+    });
+    summary.patternTurns += 1;
+  }
+
   // ---- Roster -------------------------------------------------------------
   // Placed on whichever project is running. Without one the placements still
   // stand — a yard day is a real placement — so a tenant with no projects gets
@@ -772,6 +1083,83 @@ export async function seedHrDemo(params: {
       },
     });
     summary.rosterAssignments += 1;
+  }
+
+  // ---- Staffing rules -----------------------------------------------------
+  // What each thing needs, so the coverage screen has something to measure
+  // against. Without a rule the screen is honest but empty: nothing can be
+  // short of a number nobody has written down.
+  for (const spec of STAFFING_RULES) {
+    const already = await db.staffingRule.findFirst({ where: { name: spec.name } });
+    if (already) continue;
+
+    await db.staffingRule.create({
+      data: {
+        organisationId,
+        name: spec.name,
+        projectId: spec.onSite ? (site?.id ?? null) : null,
+        department: spec.department ?? null,
+        shiftId: spec.shift ? (shiftIds[spec.shift] ?? null) : null,
+        weekdays: spec.weekdays,
+        minimumPeople: spec.minimumPeople,
+        maximumPeople: spec.maximumPeople ?? null,
+      },
+    });
+    summary.staffingRules += 1;
+  }
+
+  // ---- Time worked --------------------------------------------------------
+  // The shift is copied from the person's pattern at the moment they clock in,
+  // exactly as the service does it, so the demonstration's variance figures
+  // are computed the same way a real one would be.
+  for (const spec of TIME_ENTRIES) {
+    const employeeId = employeeIds[spec.who];
+    if (!employeeId) continue;
+
+    const clockedInAt = new Date();
+    if (spec.startsAtHour < 0) {
+      // Negative means "this many hours ago", for somebody still on the clock.
+      clockedInAt.setUTCHours(clockedInAt.getUTCHours() + spec.startsAtHour, 0, 0, 0);
+    } else {
+      clockedInAt.setUTCDate(clockedInAt.getUTCDate() - spec.startedDaysAgo);
+      clockedInAt.setUTCHours(spec.startsAtHour, 0, 0, 0);
+    }
+
+    const already = await db.timeEntry.findFirst({
+      where: { employeeId, clockedInAt },
+    });
+    if (already) continue;
+
+    const employee = await db.employee.findUnique({
+      where: { id: employeeId },
+      select: { shiftId: true, workPattern: { select: { shiftId: true } } },
+    });
+
+    await db.timeEntry.create({
+      data: {
+        organisationId,
+        employeeId,
+        workedOn: new Date(
+          Date.UTC(
+            clockedInAt.getUTCFullYear(),
+            clockedInAt.getUTCMonth(),
+            clockedInAt.getUTCDate(),
+          ),
+        ),
+        clockedInAt,
+        clockedOutAt:
+          spec.hours === null
+            ? null
+            : new Date(clockedInAt.getTime() + spec.hours * 3_600_000),
+        breakMinutes: spec.breakMinutes,
+        projectId: site?.id ?? null,
+        shiftId: employee?.shiftId ?? employee?.workPattern?.shiftId ?? null,
+        note: spec.note,
+        approvedAt: spec.approved ? new Date() : null,
+        approvedById: spec.approved ? (userIds.project_manager ?? null) : null,
+      },
+    });
+    summary.timeEntries += 1;
   }
 
   // ---- Leave requests -----------------------------------------------------

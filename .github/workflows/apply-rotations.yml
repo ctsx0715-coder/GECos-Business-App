@@ -1,0 +1,40 @@
+name: Apply rotations
+
+# The scheduled half of the rotation.
+#
+# A turn on a pattern is written before it starts — that is the point of
+# planning one — so something has to put people on it when the day arrives.
+# This runs every morning ahead of the earliest shift and applies whatever is
+# due.
+#
+# Idempotent: each turn records the moment it took effect, so a second run the
+# same day moves nobody, and a week of runs GitHub skipped applies each turn
+# once when it next fires. The assignment screen calls the same service on
+# load, so a missed run costs hours rather than correctness.
+
+on:
+  schedule:
+    # 02:30 UTC — 04:30 in Johannesburg, before the earliest day shift starts.
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Move people onto turns that start today
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm hr:rotate

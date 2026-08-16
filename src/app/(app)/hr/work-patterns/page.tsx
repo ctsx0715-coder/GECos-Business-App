@@ -81,6 +81,12 @@ export default async function WorkPatternsPage() {
                       {pattern.shift
                         ? `${pattern.shift.name} ${describeShift(pattern.shift)}`
                         : `${Number(pattern.hoursPerDay)} hours a day`}
+                      {pattern.rotationWeeks
+                        ? ` · rotates every ${pattern.rotationWeeks} weeks`
+                        : ""}
+                      {pattern.maxConsecutiveTurns
+                        ? ` · watched after ${pattern.maxConsecutiveTurns} turns`
+                        : ""}
                     </span>
                   </span>
                   <span className="tabular shrink-0 text-sm text-muted">
@@ -102,6 +108,8 @@ export default async function WorkPatternsPage() {
                     cycleDays: pattern.cycleDays,
                     workingDayIndexes: pattern.workingDayIndexes,
                     hoursPerDay: Number(pattern.hoursPerDay),
+                    rotationWeeks: pattern.rotationWeeks ?? 0,
+                    maxConsecutiveTurns: pattern.maxConsecutiveTurns ?? 0,
                     isDefault: pattern.isDefault,
                     isActive: pattern.isActive,
                   }}

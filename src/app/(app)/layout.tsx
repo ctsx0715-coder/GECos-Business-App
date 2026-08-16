@@ -163,6 +163,42 @@ const NAV: NavItem[] = [
     group: "cycles",
   },
   {
+    href: "/hr/timesheets",
+    label: "Timesheets",
+    icon: "clock",
+    moduleKey: "hr",
+    // No permission: everybody can clock themselves in, and the screen shows
+    // a person with nothing more than that only their own week.
+    group: "cycles",
+    needsEmployeeRecord: true,
+  },
+  {
+    href: "/hr/coverage",
+    label: "Coverage",
+    icon: "alert",
+    moduleKey: "hr",
+    permission: "hr.roster.view",
+    group: "cycles",
+  },
+  {
+    href: "/hr/month",
+    label: "Month view",
+    icon: "calendar",
+    moduleKey: "hr",
+    // No permission: it opens on your own month, and there is no permission
+    // for being yourself. Anybody else's is gated in the service.
+    group: "cycles",
+    needsEmployeeRecord: true,
+  },
+  {
+    href: "/hr/rotation",
+    label: "Rotation",
+    icon: "users",
+    moduleKey: "hr",
+    permission: "hr.roster.view",
+    group: "cycles",
+  },
+  {
     href: "/hr/shifts",
     label: "Shifts",
     icon: "clock",

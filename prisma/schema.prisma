@@ -46,6 +46,7 @@ enum EntityType {
   ASSET
   SUPPLIER
   EXPENSE
+  LEAVE_REQUEST
 }
 
 enum TenderStatus {
@@ -267,45 +268,48 @@ enum AccessLevel {
 
 /// The tenant root. Has no organisationId because it is the organisation.
 model Organisation {
-  id               String  @id @default(uuid()) @db.Uuid
-  name             String
-  tradingName      String?
+  id                 String  @id @default(uuid()) @db.Uuid
+  name               String
+  tradingName        String?
   registrationNumber String?
   vatNumber          String?
   /// IANA timezone used to render every timestamp for this tenant.
-  timezone         String  @default("Africa/Johannesburg")
-  currency         String  @default("ZAR")
+  timezone           String  @default("Africa/Johannesburg")
+  currency           String  @default("ZAR")
 
   recordStatus RecordStatus @default(ACTIVE)
   createdAt    DateTime     @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
   deletedAt    DateTime?    @db.Timestamptz(6)
 
-  modules          OrganisationModule[]
-  publicHolidays   PublicHoliday[]
-  workPatterns     WorkPattern[]
-  shifts           Shift[]
-  users            User[]
-  roles            Role[]
-  customers        Customer[]
-  contacts         Contact[]
-  leads            Lead[]
-  opportunities    Opportunity[]
-  activities       Activity[]
-  projects         Project[]
-  tenders          Tender[]
-  documents        Document[]
-  complianceItems  ComplianceItem[]
-  workflowDefs     WorkflowDefinition[]
-  workflowInstance WorkflowInstance[]
-  notifications    Notification[]
-  auditLogs        AuditLog[]
-  sequences        ReferenceSequence[]
-  employees        Employee[]
-  leaveTypes       LeaveType[]
-  leaveBalances    LeaveBalance[]
-  leaveRequests    LeaveRequest[]
-  rosterAssignments RosterAssignment[]
+  modules            OrganisationModule[]
+  publicHolidays     PublicHoliday[]
+  workPatterns       WorkPattern[]
+  shifts             Shift[]
+  users              User[]
+  roles              Role[]
+  customers          Customer[]
+  contacts           Contact[]
+  leads              Lead[]
+  opportunities      Opportunity[]
+  activities         Activity[]
+  projects           Project[]
+  tenders            Tender[]
+  documents          Document[]
+  complianceItems    ComplianceItem[]
+  workflowDefs       WorkflowDefinition[]
+  workflowInstance   WorkflowInstance[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  sequences          ReferenceSequence[]
+  employees          Employee[]
+  leaveTypes         LeaveType[]
+  leaveBalances      LeaveBalance[]
+  leaveRequests      LeaveRequest[]
+  rosterAssignments  RosterAssignment[]
+  patternAssignments PatternAssignment[]
+  staffingRules      StaffingRule[]
+  timeEntries        TimeEntry[]
 
   @@map("organisations")
 }
@@ -354,26 +358,27 @@ model User {
   manager      User?        @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
   reports      User[]       @relation("UserManager")
 
-  roles              UserRole[]
-  ownedTenders       Tender[]             @relation("TenderOwner")
-  uploadedVersions   DocumentVersion[]
-  startedWorkflows   WorkflowInstance[]   @relation("WorkflowStartedBy")
-  assignedApprovals  WorkflowApproval[]   @relation("ApprovalAssignee")
-  decidedApprovals   WorkflowApproval[]   @relation("ApprovalDecider")
-  stepApproverFor    WorkflowStep[]       @relation("StepApproverUser")
-  stepEscalationFor  WorkflowStep[]       @relation("StepEscalationUser")
-  notifications      Notification[]
-  auditLogs          AuditLog[]
-  ownedLeads         Lead[]               @relation("LeadOwner")
-  ownedOpportunities Opportunity[]        @relation("OpportunityOwner")
-  activities         Activity[]           @relation("ActivityOwner")
-  managedProjects    Project[]            @relation("ProjectManager")
-  projectMemberships ProjectMember[]
-  assignedTasks      ProjectTask[]        @relation("TaskAssignee")
-  submittedExpenses  ProjectExpense[]     @relation("ExpenseSubmitter")
-  approvedExpenses   ProjectExpense[]     @relation("ExpenseApprover")
-  employeeRecord     Employee?
-  decidedLeave       LeaveRequest[]       @relation("LeaveDecider")
+  roles               UserRole[]
+  ownedTenders        Tender[]           @relation("TenderOwner")
+  uploadedVersions    DocumentVersion[]
+  startedWorkflows    WorkflowInstance[] @relation("WorkflowStartedBy")
+  assignedApprovals   WorkflowApproval[] @relation("ApprovalAssignee")
+  decidedApprovals    WorkflowApproval[] @relation("ApprovalDecider")
+  approvedTimeEntries TimeEntry[]        @relation("TimeEntryApprover")
+  stepApproverFor     WorkflowStep[]     @relation("StepApproverUser")
+  stepEscalationFor   WorkflowStep[]     @relation("StepEscalationUser")
+  notifications       Notification[]
+  auditLogs           AuditLog[]
+  ownedLeads          Lead[]             @relation("LeadOwner")
+  ownedOpportunities  Opportunity[]      @relation("OpportunityOwner")
+  activities          Activity[]         @relation("ActivityOwner")
+  managedProjects     Project[]          @relation("ProjectManager")
+  projectMemberships  ProjectMember[]
+  assignedTasks       ProjectTask[]      @relation("TaskAssignee")
+  submittedExpenses   ProjectExpense[]   @relation("ExpenseSubmitter")
+  approvedExpenses    ProjectExpense[]   @relation("ExpenseApprover")
+  employeeRecord      Employee?
+  decidedLeave        LeaveRequest[]     @relation("LeaveDecider")
 
   @@unique([organisationId, email])
   @@index([organisationId])
@@ -400,9 +405,9 @@ model Role {
 
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
-  permissions      RolePermission[]
-  users            UserRole[]
-  stepApproverFor  WorkflowStep[]     @relation("StepApproverRole")
+  permissions       RolePermission[]
+  users             UserRole[]
+  stepApproverFor   WorkflowStep[]     @relation("StepApproverRole")
   assignedApprovals WorkflowApproval[] @relation("ApprovalAssigneeRole")
 
   @@unique([organisationId, key])
@@ -500,12 +505,12 @@ model Customer {
   updatedBy    String?      @db.Uuid
   deletedAt    DateTime?    @db.Timestamptz(6)
 
-  organisation  Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  tenders       Tender[]
-  contacts      Contact[]
-  opportunities Opportunity[]
-  projects      Project[]
-  convertedFromLeads Lead[]   @relation("LeadConvertedCustomer")
+  organisation       Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  tenders            Tender[]
+  contacts           Contact[]
+  opportunities      Opportunity[]
+  projects           Project[]
+  convertedFromLeads Lead[]        @relation("LeadConvertedCustomer")
 
   @@index([organisationId])
   @@index([organisationId, name])
@@ -564,10 +569,10 @@ model Lead {
 
   /// Set when the lead becomes a customer and an opportunity. Both are
   /// recorded so the trail from enquiry to revenue stays intact.
-  convertedAt           DateTime? @db.Timestamptz(6)
-  convertedCustomerId   String?   @db.Uuid
-  convertedOpportunityId String?  @db.Uuid
-  disqualifiedReason    String?
+  convertedAt            DateTime? @db.Timestamptz(6)
+  convertedCustomerId    String?   @db.Uuid
+  convertedOpportunityId String?   @db.Uuid
+  disqualifiedReason     String?
 
   recordStatus RecordStatus @default(ACTIVE)
   createdAt    DateTime     @default(now()) @db.Timestamptz(6)
@@ -576,9 +581,9 @@ model Lead {
   updatedBy    String?      @db.Uuid
   deletedAt    DateTime?    @db.Timestamptz(6)
 
-  organisation        Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  owner               User?        @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  convertedCustomer   Customer?    @relation("LeadConvertedCustomer", fields: [convertedCustomerId], references: [id], onDelete: SetNull)
+  organisation         Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  owner                User?        @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  convertedCustomer    Customer?    @relation("LeadConvertedCustomer", fields: [convertedCustomerId], references: [id], onDelete: SetNull)
   convertedOpportunity Opportunity? @relation("LeadConvertedOpportunity", fields: [convertedOpportunityId], references: [id], onDelete: SetNull)
 
   @@unique([organisationId, reference])
@@ -682,16 +687,16 @@ model Tender {
   customerId     String? @db.Uuid
   ownerId        String? @db.Uuid
 
-  closingAt          DateTime     @db.Timestamptz(6)
+  closingAt           DateTime     @db.Timestamptz(6)
   estimatedValueCents BigInt?
-  currency           String       @default("ZAR")
-  industry           String?
-  status             TenderStatus @default(IDENTIFIED)
+  currency            String       @default("ZAR")
+  industry            String?
+  status              TenderStatus @default(IDENTIFIED)
 
-  submittedAt      DateTime? @db.Timestamptz(6)
-  outcomeAt        DateTime? @db.Timestamptz(6)
+  submittedAt       DateTime? @db.Timestamptz(6)
+  outcomeAt         DateTime? @db.Timestamptz(6)
   awardedValueCents BigInt?
-  outcomeNotes     String?
+  outcomeNotes      String?
 
   recordStatus RecordStatus @default(ACTIVE)
   createdAt    DateTime     @default(now()) @db.Timestamptz(6)
@@ -726,11 +731,11 @@ model TenderRequirement {
   isMandatory    Boolean @default(true)
   sortOrder      Int     @default(0)
 
-  satisfiedAt     DateTime? @db.Timestamptz(6)
-  satisfiedBy     String?   @db.Uuid
+  satisfiedAt DateTime? @db.Timestamptz(6)
+  satisfiedBy String?   @db.Uuid
   /// Optional link to the document that satisfies this requirement.
-  documentId      String?   @db.Uuid
-  notes           String?
+  documentId  String?   @db.Uuid
+  notes       String?
 
   recordStatus RecordStatus @default(ACTIVE)
   createdAt    DateTime     @default(now()) @db.Timestamptz(6)
@@ -766,10 +771,10 @@ model Project {
   opportunityId  String? @db.Uuid
   managerId      String? @db.Uuid
 
-  status    ProjectStatus @default(PLANNING)
-  startsAt  DateTime?     @db.Timestamptz(6)
-  endsAt    DateTime?     @db.Timestamptz(6)
-  closedAt  DateTime?     @db.Timestamptz(6)
+  status   ProjectStatus @default(PLANNING)
+  startsAt DateTime?     @db.Timestamptz(6)
+  endsAt   DateTime?     @db.Timestamptz(6)
+  closedAt DateTime?     @db.Timestamptz(6)
 
   /// What the client pays. Revenue.
   contractValueCents BigInt?
@@ -794,17 +799,18 @@ model Project {
   opportunity  Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
   manager      User?        @relation("ProjectManager", fields: [managerId], references: [id], onDelete: SetNull)
 
-  members    ProjectMember[]
-  tasks      ProjectTask[]
-  milestones ProjectMilestone[]
-  expenses   ProjectExpense[]
+  members           ProjectMember[]
+  tasks             ProjectTask[]
+  milestones        ProjectMilestone[]
+  expenses          ProjectExpense[]
+  rosterAssignments RosterAssignment[]
+  staffingRules     StaffingRule[]
+  timeEntries       TimeEntry[]
 
   @@unique([organisationId, reference])
   @@index([organisationId])
   @@index([organisationId, status])
   @@index([customerId])
-    rosterAssignments RosterAssignment[]
-
   @@map("projects")
 }
 
@@ -834,16 +840,16 @@ model ProjectMember {
 }
 
 model ProjectMilestone {
-  id             String    @id @default(uuid()) @db.Uuid
-  organisationId String    @db.Uuid
-  projectId      String    @db.Uuid
-  name           String
-  description    String?
-  dueAt          DateTime? @db.Timestamptz(6)
-  completedAt    DateTime? @db.Timestamptz(6)
-  sortOrder      Int       @default(0)
+  id                 String    @id @default(uuid()) @db.Uuid
+  organisationId     String    @db.Uuid
+  projectId          String    @db.Uuid
+  name               String
+  description        String?
+  dueAt              DateTime? @db.Timestamptz(6)
+  completedAt        DateTime? @db.Timestamptz(6)
+  sortOrder          Int       @default(0)
   /// Payment milestones drive invoicing, so they are marked as such.
-  isPaymentMilestone Boolean @default(false)
+  isPaymentMilestone Boolean   @default(false)
   valueCents         BigInt?
 
   createdAt DateTime  @default(now()) @db.Timestamptz(6)
@@ -906,9 +912,9 @@ model ProjectExpense {
   incurredAt     DateTime        @db.Timestamptz(6)
   supplierName   String?
 
-  submittedById String?   @db.Uuid
-  approvedById  String?   @db.Uuid
-  approvedAt    DateTime? @db.Timestamptz(6)
+  submittedById  String?   @db.Uuid
+  approvedById   String?   @db.Uuid
+  approvedAt     DateTime? @db.Timestamptz(6)
   rejectedReason String?
 
   recordStatus RecordStatus @default(ACTIVE)
@@ -1073,10 +1079,10 @@ model WorkflowStep {
   name                 String
   approverType         ApproverType
 
-  approverRoleId    String? @db.Uuid
-  approverUserId    String? @db.Uuid
-  escalationUserId  String? @db.Uuid
-  slaHours          Int?
+  approverRoleId   String? @db.Uuid
+  approverUserId   String? @db.Uuid
+  escalationUserId String? @db.Uuid
+  slaHours         Int?
 
   /// Scalar condition on the triggering record. Null means the step always
   /// applies. Cross-entity conditions are deliberately out of scope.
@@ -1138,14 +1144,14 @@ model WorkflowApproval {
   workflowStepId     String @db.Uuid
   sortOrder          Int
 
-  status               WorkflowApprovalStatus @default(PENDING)
-  assignedToUserId     String?                @db.Uuid
-  assignedToRoleId     String?                @db.Uuid
-  decidedByUserId      String?                @db.Uuid
-  decidedAt            DateTime?              @db.Timestamptz(6)
-  comment              String?
-  dueAt                DateTime?              @db.Timestamptz(6)
-  escalatedAt          DateTime?              @db.Timestamptz(6)
+  status           WorkflowApprovalStatus @default(PENDING)
+  assignedToUserId String?                @db.Uuid
+  assignedToRoleId String?                @db.Uuid
+  decidedByUserId  String?                @db.Uuid
+  decidedAt        DateTime?              @db.Timestamptz(6)
+  comment          String?
+  dueAt            DateTime?              @db.Timestamptz(6)
+  escalatedAt      DateTime?              @db.Timestamptz(6)
 
   createdAt DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @db.Timestamptz(6)
@@ -1183,8 +1189,8 @@ model Notification {
   /// Deep link into the app.
   href       String?
 
-  readAt DateTime? @db.Timestamptz(6)
-  sentAt DateTime? @db.Timestamptz(6)
+  readAt       DateTime? @db.Timestamptz(6)
+  sentAt       DateTime? @db.Timestamptz(6)
   /// Set when a channel delivery fails, for retry and debugging.
   failedReason String?
 
@@ -1267,6 +1273,14 @@ model Employee {
   employmentType EmploymentType @default(PERMANENT)
   /// Which days they work. Null means the tenant's default pattern.
   workPatternId  String?        @db.Uuid
+  /// Which hours they work them on, when that differs from the pattern's own
+  /// shift. The same six-day pattern is worked on days by one crew and nights
+  /// by another, and a rotation swaps the shift while the days stay put — so
+  /// the shift cannot live only on the pattern.
+  ///
+  /// Both this and workPatternId are the *current* answer, written by the
+  /// rotation and read everywhere. The history is in pattern_assignments.
+  shiftId        String?        @db.Uuid
   status         EmployeeStatus @default(ACTIVE)
   startedAt      DateTime       @db.Timestamptz(6)
   /// Set on exit. The record is never deleted — statutory retention applies.
@@ -1285,10 +1299,13 @@ model Employee {
   manager      Employee?    @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
   reports      Employee[]   @relation("EmployeeManager")
   workPattern  WorkPattern? @relation(fields: [workPatternId], references: [id], onDelete: SetNull)
+  shift        Shift?       @relation(fields: [shiftId], references: [id], onDelete: SetNull)
 
-  leaveBalances LeaveBalance[]
-  leaveRequests LeaveRequest[]
-  rosterAssignments RosterAssignment[]
+  leaveBalances      LeaveBalance[]
+  leaveRequests      LeaveRequest[]
+  rosterAssignments  RosterAssignment[]
+  patternAssignments PatternAssignment[]
+  timeEntries        TimeEntry[]
 
   @@unique([organisationId, employeeNumber])
   @@unique([userId])
@@ -1306,32 +1323,32 @@ model Employee {
 /// (docs/02-discovery-questions.md). Encoding the rules as rows means the
 /// answer changes data, not the data model.
 model LeaveType {
-  id             String @id @default(uuid()) @db.Uuid
-  organisationId String @db.Uuid
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
   code           String
   name           String
   description    String?
 
   /// Entitlement per cycle. Null means uncapped — unpaid leave, typically.
-  daysPerCycle Decimal? @db.Decimal(6, 2)
-  isPaid       Boolean  @default(true)
+  daysPerCycle              Decimal? @db.Decimal(6, 2)
+  isPaid                    Boolean  @default(true)
   /// Days that may be carried into the next cycle. Null means none.
-  carryOverMaxDays Decimal? @db.Decimal(6, 2)
+  carryOverMaxDays          Decimal? @db.Decimal(6, 2)
   /// Sick leave over two consecutive days needs a medical certificate under
   /// the BCEA. Expressed as a threshold so a stricter policy is a row edit.
   documentRequiredAfterDays Int?
   /// Whether a request may be backdated. Sick leave usually is; annual is not.
-  allowsBackdating Boolean @default(false)
+  allowsBackdating          Boolean  @default(false)
 
   /// How this type's entitlement is credited. MANUAL is the default because
   /// it is what every existing row did before accrual existed, and a migration
   /// that silently started crediting days would rewrite people's balances.
-  accrualMethod LeaveAccrualMethod @default(MANUAL)
+  accrualMethod        LeaveAccrualMethod @default(MANUAL)
   /// Days credited per completed month under MONTHLY_ACCRUAL. Ignored by the
   /// other methods, which take their figure from daysPerCycle.
-  accrualDaysPerPeriod Decimal? @db.Decimal(6, 2)
+  accrualDaysPerPeriod Decimal?           @db.Decimal(6, 2)
 
-  sortOrder Int @default(0)
+  sortOrder Int     @default(0)
   isActive  Boolean @default(true)
 
   recordStatus RecordStatus @default(ACTIVE)
@@ -1366,12 +1383,12 @@ model LeaveBalance {
   cycleStartsAt DateTime @db.Timestamptz(6)
   cycleEndsAt   DateTime @db.Timestamptz(6)
 
-  entitledDays  Decimal @default(0) @db.Decimal(6, 2)
+  entitledDays       Decimal @default(0) @db.Decimal(6, 2)
   /// Carried in from the previous cycle, kept separate so it can be reported.
   broughtForwardDays Decimal @default(0) @db.Decimal(6, 2)
   /// Approved and taken. Pending requests are not counted here — they are
   /// counted at request time, so two overlapping requests cannot both fit.
-  takenDays     Decimal @default(0) @db.Decimal(6, 2)
+  takenDays          Decimal @default(0) @db.Decimal(6, 2)
 
   /// The date up to which accrual has already credited this balance. It is
   /// what makes a run idempotent: the engine credits the periods between this
@@ -1410,8 +1427,8 @@ model LeaveBalance {
 /// time of day and not a moment: 18:00 means 18:00 on whichever date it is
 /// worked, in the tenant's timezone, which no timestamp can express.
 model Shift {
-  id             String @id @default(uuid()) @db.Uuid
-  organisationId String @db.Uuid
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
   code           String
   name           String
   description    String?
@@ -1434,8 +1451,12 @@ model Shift {
   updatedBy    String?      @db.Uuid
   deletedAt    DateTime?    @db.Timestamptz(6)
 
-  organisation Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  patterns     WorkPattern[]
+  organisation  Organisation        @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  patterns      WorkPattern[]
+  employees     Employee[]
+  assignments   PatternAssignment[]
+  staffingRules StaffingRule[]
+  timeEntries   TimeEntry[]
 
   @@unique([organisationId, code])
   @@index([organisationId])
@@ -1456,26 +1477,42 @@ model Shift {
 /// `anchorOn`. A seven-day cycle anchored on a Monday makes index 0 Monday,
 /// which is the ordinary case and reads as such.
 model WorkPattern {
-  id             String @id @default(uuid()) @db.Uuid
-  organisationId String @db.Uuid
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
   code           String
   name           String
   description    String?
 
   /// 7 for a weekly pattern, 14 for a fortnightly rotation.
-  cycleDays Int @default(7)
+  cycleDays         Int      @default(7)
   /// Positions in the cycle that are worked, 0-indexed from anchorOn.
   workingDayIndexes Int[]
   /// The day index 0 falls on. Irrelevant for a weekly pattern anchored on a
   /// Monday, and the whole story for a rotation.
-  anchorOn DateTime @db.Timestamptz(6)
+  anchorOn          DateTime @db.Timestamptz(6)
   /// Informational for leave, which is counted in days. Timesheets and
   /// overtime will need it, and recording it now costs nothing.
-  hoursPerDay Decimal @default(8) @db.Decimal(4, 2)
+  hoursPerDay       Decimal  @default(8) @db.Decimal(4, 2)
 
   /// The shift worked on this pattern's days. Null means the hours are not
   /// specified — true of an office pattern where nobody clocks in.
   shiftId String? @db.Uuid
+
+  /// How long a turn on this pattern lasts before people are rotated off it,
+  /// in weeks. Null is a standing pattern nobody rotates off — the office
+  /// week, and most of the payroll. It sets the default end date when the
+  /// pattern is assigned; it does not move anybody on its own.
+  rotationWeeks Int?
+
+  /// How many turns in a row on this pattern is too many for one person.
+  ///
+  /// Null exempts the pattern from the fairness watch, which is what an office
+  /// weekday pattern wants: nobody is hard done by a fourth Monday-to-Friday
+  /// month. On nights or a six-day week it is the number that decides when the
+  /// system says something — and it only ever says something. Refusing the
+  /// assignment would put a rule between a foreman and a crew he has to staff
+  /// tonight, and he would work around it by not recording the truth.
+  maxConsecutiveTurns Int?
 
   /// The pattern used by anybody who has not been given one of their own.
   /// Exactly one per tenant, enforced by the service rather than the schema,
@@ -1491,13 +1528,63 @@ model WorkPattern {
   updatedBy    String?      @db.Uuid
   deletedAt    DateTime?    @db.Timestamptz(6)
 
-  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  shift        Shift?       @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  organisation Organisation        @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  shift        Shift?              @relation(fields: [shiftId], references: [id], onDelete: SetNull)
   employees    Employee[]
+  assignments  PatternAssignment[]
 
   @@unique([organisationId, code])
   @@index([organisationId])
   @@map("work_patterns")
+}
+
+/// A turn on a pattern: who worked which pattern, on which shift, from when.
+///
+/// The employee row carries the *current* pattern and shift, because every
+/// screen and every leave calculation asks that question and none of them
+/// should have to reconstruct it. This table is the history behind it, and it
+/// exists for three things the single pointer cannot do.
+///
+/// It answers "since when", which matters the moment somebody disputes a
+/// payslip. It lets the next turn be written before it starts, so next month's
+/// rotation is decided while the foreman has the crew in front of him rather
+/// than at 05:00 on the day. And it is what the fairness watch reads: whether
+/// this person has drawn nights three turns running is a question about the
+/// past, and a system that only stores the present cannot answer it.
+model PatternAssignment {
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  employeeId     String  @db.Uuid
+  workPatternId  String  @db.Uuid
+  /// The hours worked on it. Null takes the pattern's own shift.
+  shiftId        String? @db.Uuid
+
+  /// First day of the turn, at UTC midnight.
+  startsOn  DateTime  @db.Timestamptz(6)
+  /// Last day of it. Null is an open-ended turn, which a standing pattern is.
+  endsOn    DateTime? @db.Timestamptz(6)
+  /// When the employee row was actually pointed at this pattern. Null means
+  /// the turn is still in the future and has not taken effect yet.
+  appliedAt DateTime? @db.Timestamptz(6)
+  /// Why, where a reason exists: "covering Sipho's leave", "crane ticket".
+  note      String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  workPattern  WorkPattern  @relation(fields: [workPatternId], references: [id], onDelete: Cascade)
+  shift        Shift?       @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@index([organisationId, startsOn])
+  @@index([employeeId, startsOn])
+  @@map("pattern_assignments")
 }
 
 /// Somebody placed on a site for a stretch of days.
@@ -1512,9 +1599,9 @@ model WorkPattern {
 /// are computed from the person's work pattern, which already knows they do
 /// not work Sundays.
 model RosterAssignment {
-  id             String @id @default(uuid()) @db.Uuid
-  organisationId String @db.Uuid
-  employeeId     String @db.Uuid
+  id             String  @id @default(uuid()) @db.Uuid
+  organisationId String  @db.Uuid
+  employeeId     String  @db.Uuid
   /// Where they are. Null is a placement with no project — a yard day, or
   /// training — which still has to be visible or the roster lies about who is
   /// available.
@@ -1541,6 +1628,123 @@ model RosterAssignment {
   @@index([organisationId, startsAt])
   @@index([employeeId, startsAt])
   @@map("roster_assignments")
+}
+
+/// One stretch of time somebody was actually at work.
+///
+/// Everything else in Work cycles is a plan: the pattern says which days
+/// somebody should work, the shift says which hours, the roster says where.
+/// This is the only record of what happened, and it is a separate table for
+/// exactly that reason — reconciling the two is the point, and a plan that
+/// overwrites itself with reality can no longer be compared to it.
+///
+/// Stored as two moments rather than a duration, because "when did you leave"
+/// is the question in dispute when a payslip is queried, and a number of hours
+/// cannot answer it. The minutes worked are derived, never stored: a stored
+/// total is one more thing that can disagree with the times beside it.
+model TimeEntry {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  employeeId     String @db.Uuid
+
+  /// The working day this belongs to, at UTC midnight.
+  ///
+  /// A night shift starting at 18:00 on Tuesday and ending at 06:00 on
+  /// Wednesday is Tuesdays work, and paying it against Wednesday would put
+  /// half a construction payroll on the wrong week. Derived from the moment
+  /// they clocked in, and stored so a day can be looked up without arithmetic.
+  workedOn DateTime @db.Timestamptz(6)
+
+  clockedInAt  DateTime  @db.Timestamptz(6)
+  /// Null while somebody is still on the clock.
+  clockedOutAt DateTime? @db.Timestamptz(6)
+  /// Unpaid break, subtracted from the time between the two moments.
+  breakMinutes Int       @default(0)
+
+  /// Where they were, when it is known. Taken from the roster at clock-in.
+  projectId String? @db.Uuid
+  /// The shift they were on, for comparing what was worked to what was planned.
+  shiftId   String? @db.Uuid
+
+  note String?
+
+  /// Signed off for payroll. Nothing is paid from an unapproved entry, and an
+  /// approved one is not edited — a correction after that is a new entry with
+  /// a reason on it, so the trail survives the disagreement.
+  approvedAt   DateTime? @db.Timestamptz(6)
+  approvedById String?   @db.Uuid
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  shift        Shift?       @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  approvedBy   User?        @relation("TimeEntryApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@index([organisationId, workedOn])
+  @@index([employeeId, workedOn])
+  @@map("time_entries")
+}
+
+/// How many people a site, a trade or the company needs on a given day.
+///
+/// "Are we short on Tuesday" is a question nobody could ask this system: it
+/// knew who was rostered and who was on leave, and had no idea how many were
+/// supposed to be there. The number is a row rather than a constant because it
+/// is a judgement that changes weekly — a concrete pour needs eight, the same
+/// site needs three the week after — and because the person who knows it is a
+/// site manager rather than whoever deploys.
+///
+/// Deliberately not a shift-by-shift schedule. That is a different and much
+/// larger thing (every day of every week planned individually), and most of
+/// what it buys is already here: the pattern says who is due in, the roster
+/// says where, and this says how many are wanted. If somebody later needs the
+/// full schedule, these rules are the floor it would be built on.
+model StaffingRule {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  name           String
+
+  /// The site it is about. Null is a rule about the whole company.
+  projectId  String? @db.Uuid
+  /// The trade or department it counts. Null counts everybody.
+  department String?
+  /// The shift it counts. Null counts whoever is due in, whatever the hours.
+  shiftId    String? @db.Uuid
+
+  /// Days the rule applies to, 0 = Monday. Empty means every day — the
+  /// working pattern already decides which of those anybody is due in on, so
+  /// a rule does not have to repeat it.
+  weekdays Int[]
+
+  /// Below this, the day is short.
+  minimumPeople Int
+  /// Above this, the day is overstaffed. Null means no ceiling, which is the
+  /// honest answer for most sites: too many hands is a cost, not a failure.
+  maximumPeople Int?
+
+  isActive Boolean @default(true)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  shift        Shift?       @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@map("staffing_rules")
 }
 
 /// A day the company does not work, and therefore does not charge to leave.
@@ -1594,10 +1798,10 @@ model LeaveRequest {
   days     Decimal  @db.Decimal(6, 2)
   reason   String?
 
-  status           LeaveRequestStatus @default(SUBMITTED)
-  decidedById      String?            @db.Uuid
-  decidedAt        DateTime?          @db.Timestamptz(6)
-  decisionComment  String?
+  status          LeaveRequestStatus @default(SUBMITTED)
+  decidedById     String?            @db.Uuid
+  decidedAt       DateTime?          @db.Timestamptz(6)
+  decisionComment String?
 
   recordStatus RecordStatus @default(ACTIVE)
   createdAt    DateTime     @default(now()) @db.Timestamptz(6)

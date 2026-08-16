@@ -33,6 +33,7 @@ const ENTITIES: Choice[] = [
   { value: "TENDER", label: "Tenders" },
   { value: "EXPENSE", label: "Project expenses" },
   { value: "PROJECT", label: "Projects" },
+  { value: "LEAVE_REQUEST", label: "Leave requests" },
 ];
 
 /** The events services actually raise. A chain on anything else never runs. */
@@ -47,6 +48,9 @@ const TRIGGERS: Record<string, Choice[]> = {
     { value: "expense.submitted", label: "When an expense is submitted" },
   ],
   PROJECT: [{ value: "project.closed", label: "When a project is closed" }],
+  LEAVE_REQUEST: [
+    { value: "leave.requested", label: "When leave is requested" },
+  ],
 };
 
 export function NewChain() {
@@ -229,12 +233,37 @@ export function StepControls({
   );
 }
 
+/**
+ * What a step can put a condition on, per record type.
+ *
+ * A list rather than a free-text box because a field name that does not exist
+ * is not an error anybody sees: the engine finds nothing to compare, the step
+ * quietly never applies, and the chain approves less than the person who wrote
+ * it believes. These are the fields the services actually pass.
+ */
+const CONDITION_FIELDS: Record<string, Choice[]> = {
+  TENDER: [
+    { value: "estimatedValueCents", label: "Tender value (cents)" },
+    { value: "industry", label: "Industry" },
+    { value: "status", label: "Status" },
+  ],
+  EXPENSE: [{ value: "amountCents", label: "Amount (cents)" }],
+  PROJECT: [{ value: "status", label: "Status" }],
+  LEAVE_REQUEST: [
+    { value: "days", label: "Working days requested" },
+    { value: "leaveTypeCode", label: "Leave type code, e.g. ANNUAL" },
+    { value: "isPaid", label: "Paid leave (true/false)" },
+  ],
+};
+
 export function AddStep({
   chainId,
+  entityType,
   roles,
   users,
 }: {
   chainId: string;
+  entityType: string;
   roles: Choice[];
   users: Choice[];
 }) {
@@ -327,12 +356,18 @@ export function AddStep({
               placeholder="Hours to respond"
               className={inputClass}
             />
-            <input
+            <select
               value={conditionField}
               onChange={(event) => setConditionField(event.target.value)}
-              placeholder="Only when… field"
               className={inputClass}
-            />
+            >
+              <option value="">Always — no condition</option>
+              {(CONDITION_FIELDS[entityType] ?? []).map((field) => (
+                <option key={field.value} value={field.value}>
+                  Only when {field.label}
+                </option>
+              ))}
+            </select>
             <select
               value={conditionOperator}
               onChange={(event) => setConditionOperator(event.target.value)}

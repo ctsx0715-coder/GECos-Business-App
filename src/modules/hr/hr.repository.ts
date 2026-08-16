@@ -12,6 +12,16 @@ function tenant() {
   return requireRequestContext().organisationId;
 }
 
+const SHIFT_SUMMARY = {
+  select: {
+    id: true,
+    name: true,
+    startsAtMinutes: true,
+    endsAtMinutes: true,
+    breakMinutes: true,
+  },
+} as const;
+
 const EMPLOYEE_SUMMARY = {
   id: true,
   firstName: true,
@@ -40,7 +50,8 @@ export const hrRepository = {
         manager: { select: EMPLOYEE_SUMMARY },
         reports: { select: EMPLOYEE_SUMMARY },
         user: { select: { id: true, email: true } },
-        workPattern: true,
+        workPattern: { include: { shift: SHIFT_SUMMARY } },
+        shift: SHIFT_SUMMARY,
         leaveBalances: {
           include: { leaveType: true },
           orderBy: { cycleStartsAt: "desc" },
@@ -286,7 +297,10 @@ export const hrRepository = {
   },
 
   findDefaultWorkPattern() {
-    return db.workPattern.findFirst({ where: { isDefault: true, isActive: true } });
+    return db.workPattern.findFirst({
+      where: { isDefault: true, isActive: true },
+      include: { shift: { select: { id: true, name: true } } },
+    });
   },
 
   createWorkPattern(
@@ -309,6 +323,155 @@ export const hrRepository = {
     });
   },
 
+  // -- Pattern assignments --------------------------------------------------
+
+  /** Everybody a pattern can be given to, with where they stand today. */
+  listAssignableEmployees() {
+    return db.employee.findMany({
+      where: { status: { in: ["ACTIVE", "ON_LEAVE"] } },
+      orderBy: [{ department: "asc" }, { lastName: "asc" }, { firstName: "asc" }],
+      select: {
+        ...EMPLOYEE_SUMMARY,
+        department: true,
+        status: true,
+        workPatternId: true,
+        shiftId: true,
+        workPattern: {
+          select: {
+            id: true,
+            name: true,
+            maxConsecutiveTurns: true,
+            // The pattern's own shift is what somebody works when they have
+            // no override of their own, so the board cannot report the hours
+            // without it.
+            shift: { select: { id: true, name: true } },
+          },
+        },
+        shift: { select: { id: true, name: true } },
+      },
+    });
+  },
+
+  /**
+   * Every turn these people have had, newest first.
+   *
+   * One query for the whole group rather than one per person: the fairness
+   * watch asks this about the entire payroll on every page load, and eighty
+   * round trips to answer one question is how a screen becomes slow enough
+   * that somebody stops opening it.
+   */
+  turnsFor(employeeIds: string[]) {
+    return db.patternAssignment.findMany({
+      where: { employeeId: { in: employeeIds } },
+      orderBy: [{ startsOn: "desc" }],
+      include: {
+        // The whole pattern, not just its name: the month view works out
+        // which days somebody was due in *on each day of the month*, and a
+        // month containing a rotation change needs the shape of both.
+        workPattern: {
+          select: {
+            id: true,
+            name: true,
+            maxConsecutiveTurns: true,
+            cycleDays: true,
+            workingDayIndexes: true,
+            anchorOn: true,
+            hoursPerDay: true,
+            shift: SHIFT_SUMMARY,
+          },
+        },
+        shift: SHIFT_SUMMARY,
+      },
+    });
+  },
+
+  /** Turns running over a window, for the assignment screen's timeline. */
+  turnsBetween(from: Date, to: Date) {
+    return db.patternAssignment.findMany({
+      where: {
+        startsOn: { lte: to },
+        OR: [{ endsOn: null }, { endsOn: { gte: from } }],
+      },
+      orderBy: [{ startsOn: "asc" }],
+      include: {
+        employee: { select: EMPLOYEE_SUMMARY },
+        workPattern: { select: { id: true, name: true } },
+        shift: { select: { id: true, name: true } },
+      },
+    });
+  },
+
+  findPatternAssignment(id: string) {
+    return db.patternAssignment.findUnique({ where: { id } });
+  },
+
+  createPatternAssignment(
+    data: Omit<Prisma.PatternAssignmentUncheckedCreateInput, "organisationId">,
+  ) {
+    return db.patternAssignment.create({
+      data: { ...data, organisationId: tenant() },
+    });
+  },
+
+  updatePatternAssignment(
+    id: string,
+    data: Prisma.PatternAssignmentUncheckedUpdateInput,
+  ) {
+    return db.patternAssignment.update({ where: { id }, data });
+  },
+
+  deletePatternAssignment(id: string) {
+    return db.patternAssignment.delete({ where: { id } });
+  },
+
+  /**
+   * Closes whatever this person is on the day before a new turn opens.
+   *
+   * Only turns that started earlier: a turn already written for a later date
+   * is somebody else's decision about the future, and clipping it silently
+   * would undo a rotation that has already been planned.
+   */
+  closeTurnsBefore(employeeId: string, startsOn: Date, endsOn: Date) {
+    return db.patternAssignment.updateMany({
+      where: {
+        employeeId,
+        startsOn: { lt: startsOn },
+        OR: [{ endsOn: null }, { endsOn: { gte: startsOn } }],
+      },
+      data: { endsOn },
+    });
+  },
+
+  /**
+   * Clears a turn that starts on the same day as the one being written.
+   *
+   * The same person, the same start date, assigned twice: that is a decision
+   * corrected before it could mean anything, not two turns. Keeping both would
+   * leave the fairness count reading a run of two where somebody changed their
+   * mind, and the board unable to say which one is in force. Soft delete, like
+   * everything else, so the corrected version is still in the record.
+   */
+  supersedeTurnsOn(employeeId: string, startsOn: Date) {
+    return db.patternAssignment.deleteMany({ where: { employeeId, startsOn } });
+  },
+
+  /** Turns whose start date has arrived but which have not taken effect yet. */
+  dueTurns(asOf: Date) {
+    return db.patternAssignment.findMany({
+      where: { appliedAt: null, startsOn: { lte: asOf } },
+      orderBy: [{ startsOn: "asc" }],
+      include: { employee: { select: EMPLOYEE_SUMMARY } },
+    });
+  },
+
+  /** Where somebody stands right now, which every other screen reads. */
+  setEmployeePattern(
+    employeeId: string,
+    data: { workPatternId: string; shiftId: string | null },
+  ) {
+    return db.employee.update({ where: { id: employeeId }, data });
+  },
+
   /*
    * Sites to place people on.
    *
@@ -327,12 +490,17 @@ export const hrRepository = {
   },
 
   /** Assignments overlapping a window, with enough to render a roster row. */
-  listAssignments(from: Date, to: Date, filter?: { projectId?: string }) {
+  listAssignments(
+    from: Date,
+    to: Date,
+    filter?: { projectId?: string; employeeId?: string },
+  ) {
     return db.rosterAssignment.findMany({
       where: {
         startsAt: { lte: to },
         endsAt: { gte: from },
         ...(filter?.projectId ? { projectId: filter.projectId } : {}),
+        ...(filter?.employeeId ? { employeeId: filter.employeeId } : {}),
       },
       orderBy: { startsAt: "asc" },
       include: {
@@ -458,5 +626,114 @@ export const hrRepository = {
 
   updateLeaveRequest(id: string, data: Prisma.LeaveRequestUncheckedUpdateInput) {
     return db.leaveRequest.update({ where: { id }, data });
+  },
+
+  // -- Time entries ---------------------------------------------------------
+
+  /** The stretch somebody is on right now, if they are on one. */
+  openTimeEntry(employeeId: string) {
+    return db.timeEntry.findFirst({
+      where: { employeeId, clockedOutAt: null },
+      orderBy: { clockedInAt: "desc" },
+      include: { shift: SHIFT_SUMMARY, project: { select: { id: true, name: true } } },
+    });
+  },
+
+  /** Everybody currently on the clock, for the supervisor's view. */
+  openTimeEntries() {
+    return db.timeEntry.findMany({
+      where: { clockedOutAt: null },
+      orderBy: { clockedInAt: "asc" },
+      include: {
+        employee: { select: EMPLOYEE_SUMMARY },
+        shift: SHIFT_SUMMARY,
+        project: { select: { id: true, name: true } },
+      },
+    });
+  },
+
+  listTimeEntries(from: Date, to: Date, filter?: { employeeId?: string }) {
+    return db.timeEntry.findMany({
+      where: {
+        workedOn: { gte: from, lte: to },
+        ...(filter?.employeeId ? { employeeId: filter.employeeId } : {}),
+      },
+      orderBy: [{ workedOn: "asc" }, { clockedInAt: "asc" }],
+      include: {
+        employee: { select: EMPLOYEE_SUMMARY },
+        shift: SHIFT_SUMMARY,
+        project: { select: { id: true, name: true } },
+        approvedBy: { select: { firstName: true, lastName: true } },
+      },
+    });
+  },
+
+  /** Everything that touches one day, for the overlap check. */
+  timeEntriesOn(employeeId: string, workedOn: Date) {
+    return db.timeEntry.findMany({
+      where: { employeeId, workedOn },
+      orderBy: { clockedInAt: "asc" },
+    });
+  },
+
+  findTimeEntry(id: string) {
+    return db.timeEntry.findUnique({ where: { id } });
+  },
+
+  createTimeEntry(
+    data: Omit<Prisma.TimeEntryUncheckedCreateInput, "organisationId">,
+  ) {
+    return db.timeEntry.create({ data: { ...data, organisationId: tenant() } });
+  },
+
+  updateTimeEntry(id: string, data: Prisma.TimeEntryUncheckedUpdateInput) {
+    return db.timeEntry.update({ where: { id }, data });
+  },
+
+  deleteTimeEntry(id: string) {
+    return db.timeEntry.delete({ where: { id } });
+  },
+
+  // -- Staffing rules -------------------------------------------------------
+
+  listStaffingRules(includeInactive = false) {
+    return db.staffingRule.findMany({
+      where: includeInactive ? undefined : { isActive: true },
+      orderBy: [{ name: "asc" }],
+      include: {
+        project: { select: { id: true, name: true } },
+        shift: { select: { id: true, name: true } },
+      },
+    });
+  },
+
+  findStaffingRule(id: string) {
+    return db.staffingRule.findUnique({ where: { id } });
+  },
+
+  createStaffingRule(
+    data: Omit<Prisma.StaffingRuleUncheckedCreateInput, "organisationId">,
+  ) {
+    return db.staffingRule.create({
+      data: { ...data, organisationId: tenant() },
+    });
+  },
+
+  updateStaffingRule(id: string, data: Prisma.StaffingRuleUncheckedUpdateInput) {
+    return db.staffingRule.update({ where: { id }, data });
+  },
+
+  deleteStaffingRule(id: string) {
+    return db.staffingRule.delete({ where: { id } });
+  },
+
+  /** The roles one person holds, for deciding whose rung an approval is. */
+  async roleIdsOf(userId: string | null) {
+    if (!userId) return [];
+    const links = await db.userRole.findMany({
+      where: { userId },
+      select: { roleId: true },
+    });
+    return links.map((link) => link.roleId);
   },
 };

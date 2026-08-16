@@ -227,6 +227,13 @@ const workPatternFields = {
   hoursPerDay: z.number().positive().max(24).default(8),
   /** Null means the hours are not specified — an office pattern, typically. */
   shiftId: z.uuid().nullable().optional(),
+  /** How long a turn on this pattern runs before people rotate off it. */
+  rotationWeeks: z.number().int().min(1).max(52).nullable().optional(),
+  /**
+   * How many turns in a row is too many. Null exempts the pattern, which is
+   * what the office week wants — the rule exists for nights and six-day weeks.
+   */
+  maxConsecutiveTurns: z.number().int().min(1).max(24).nullable().optional(),
   isDefault: z.boolean().default(false),
 };
 
@@ -261,6 +268,137 @@ export const updateWorkPatternSchema = z
       path: ["workingDayIndexes"],
     },
   );
+
+/**
+ * Putting a group of people on a pattern.
+ *
+ * Bulk by default rather than as a special case, because moving one person is
+ * the rare half of the job: a crew goes onto nights together, and asking for
+ * eighteen separate decisions is how a roster ends up half-updated.
+ */
+export const assignPatternsSchema = z.object({
+  employeeIds: z.array(z.uuid()).min(1, "Choose at least one person."),
+  workPatternId: z.uuid(),
+  /** Null works the pattern's own shift, whatever that is. */
+  shiftId: z.uuid().nullable().optional(),
+  startsOn: z.coerce.date(),
+  /**
+   * How long the turn runs. Null is open-ended, which is what a standing
+   * pattern is — most of the payroll never rotates off Monday to Friday.
+   */
+  weeks: z.number().int().min(1).max(52).nullable().optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+export const cancelTurnSchema = z.object({
+  assignmentId: z.uuid(),
+});
+
+/**
+ * How many people a site or a trade needs.
+ *
+ * Every narrowing field is optional and null means "do not narrow by this",
+ * which is what makes one shape cover both "the whole company needs somebody
+ * on a Sunday" and "the water works needs four boilermakers on nights".
+ */
+const staffingRuleFields = {
+  name: z.string().trim().min(2, "Name the rule."),
+  /** Null is a rule about the whole company. */
+  projectId: z.uuid().nullable().optional(),
+  /** Null counts every department. */
+  department: z.string().trim().max(120).nullable().optional(),
+  /** Null counts whoever is due in, whatever hours they work. */
+  shiftId: z.uuid().nullable().optional(),
+  /** 0 = Monday. Empty means every day. */
+  weekdays: z.array(z.number().int().min(0).max(6)).default([]),
+  minimumPeople: z.number().int().min(0).max(500),
+  maximumPeople: z.number().int().min(0).max(500).nullable().optional(),
+};
+
+export const createStaffingRuleSchema = z
+  .object(staffingRuleFields)
+  .refine(
+    (data) =>
+      data.maximumPeople === null ||
+      data.maximumPeople === undefined ||
+      data.maximumPeople >= data.minimumPeople,
+    {
+      message: "The most is fewer than the fewest.",
+      path: ["maximumPeople"],
+    },
+  );
+
+export const updateStaffingRuleSchema = z
+  .object({
+    ruleId: z.uuid(),
+    ...staffingRuleFields,
+    isActive: z.boolean().default(true),
+  })
+  .refine(
+    (data) =>
+      data.maximumPeople === null ||
+      data.maximumPeople === undefined ||
+      data.maximumPeople >= data.minimumPeople,
+    {
+      message: "The most is fewer than the fewest.",
+      path: ["maximumPeople"],
+    },
+  );
+
+export const removeStaffingRuleSchema = z.object({
+  ruleId: z.uuid(),
+});
+
+/**
+ * Clocking on and off.
+ *
+ * The employee is explicit rather than implied by the session, because a
+ * foreman clocking in a crew of eighteen is the ordinary case on a site where
+ * most people have no login at all. Who is allowed to name somebody other than
+ * themselves is a permission, checked in the service.
+ */
+export const clockInSchema = z.object({
+  employeeId: z.uuid(),
+  /** Defaults to now. Supplied when a supervisor records it after the fact. */
+  at: z.coerce.date().optional(),
+  projectId: z.uuid().nullable().optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+export const clockOutSchema = z.object({
+  employeeId: z.uuid(),
+  at: z.coerce.date().optional(),
+  /** Unpaid break to subtract, in minutes. */
+  breakMinutes: z.number().int().min(0).max(480).default(0),
+  note: z.string().trim().max(500).optional(),
+});
+
+/**
+ * Correcting an entry after the fact.
+ *
+ * Both moments together, because a correction is a statement about the whole
+ * stretch — changing only the end of a night shift that was typed with the
+ * wrong start produces a number nobody can explain.
+ */
+export const correctTimeEntrySchema = z
+  .object({
+    entryId: z.uuid(),
+    clockedInAt: z.coerce.date(),
+    clockedOutAt: z.coerce.date().nullable().optional(),
+    breakMinutes: z.number().int().min(0).max(480).default(0),
+    reason: z.string().trim().min(3, "Say what was wrong with it."),
+  })
+  .refine(
+    (data) => !data.clockedOutAt || data.clockedOutAt > data.clockedInAt,
+    {
+      message: "They clocked out before they clocked in.",
+      path: ["clockedOutAt"],
+    },
+  );
+
+export const approveTimeEntriesSchema = z.object({
+  entryIds: z.array(z.uuid()).min(1, "Choose at least one entry."),
+});
 
 export const addHolidaySchema = z.object({
   observedOn: z.coerce.date(),

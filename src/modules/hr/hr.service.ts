@@ -1,16 +1,29 @@
 import { nextReference } from "@/lib/database/reference-numbers";
+import {
+  approvalTrailFor,
+  decide,
+  pendingApprovalFor,
+  startWorkflow,
+} from "@/lib/workflows/engine";
 import { requireRequestContext } from "@/lib/database/tenant-context";
 import { BusinessRuleError, ForbiddenError, NotFoundError } from "@/lib/errors";
 import { requirePermission, hasPermission } from "@/lib/permissions";
 import {
   addHolidaySchema,
   adjustBalanceSchema,
+  approveTimeEntriesSchema,
+  assignPatternsSchema,
   assignToRosterSchema,
   cancelLeaveSchema,
+  cancelTurnSchema,
   certificationSchema,
+  clockInSchema,
+  clockOutSchema,
+  correctTimeEntrySchema,
   createEmployeeSchema,
   createLeaveTypeSchema,
   createShiftSchema,
+  createStaffingRuleSchema,
   createWorkPatternSchema,
   decideLeaveSchema,
   exitEmployeeSchema,
@@ -18,11 +31,13 @@ import {
   removeAssignmentSchema,
   removeCertificationSchema,
   removeHolidaySchema,
+  removeStaffingRuleSchema,
   requestLeaveSchema,
   setBalanceSchema,
   updateEmployeeSchema,
   updateLeaveTypeSchema,
   updateShiftSchema,
+  updateStaffingRuleSchema,
   updateWorkPatternSchema,
 } from "@/schemas/hr.schema";
 import type { EmployeeStatus, LeaveRequestStatus } from "@/generated/prisma/client";
@@ -34,12 +49,38 @@ import {
   previousCycle,
 } from "./leave-accrual";
 import { isoDate, statutoryHolidays } from "./public-holidays";
-import { spanMinutes } from "./shifts";
+import {
+  consecutiveTurns,
+  dayBefore,
+  fairnessConcern,
+  startOfUtcDay,
+  turnEndsOn,
+  turnInForce,
+} from "./rotation";
+import { describeShift, spanMinutes, workedHours } from "./shifts";
+import {
+  assess,
+  describeRule,
+  ruleAppliesOn,
+  shortfall,
+  weekVerdict,
+} from "./staffing";
+import {
+  describeMoment,
+  looksUnclosed,
+  minutesSoFar,
+  minutesWorked,
+  overlaps,
+  overtimeAgainst,
+  undertimeAgainst,
+  workingDayOf,
+} from "./timesheets";
 import {
   DEFAULT_PATTERN,
   PATTERN_ANCHOR,
   workingDaysBetween as countWorkingDays,
   workingDaysIn,
+  worksOn,
   type WorkPatternShape,
 } from "./work-patterns";
 
@@ -741,6 +782,8 @@ export const hrService = {
       anchorOn: PATTERN_ANCHOR,
       hoursPerDay: data.hoursPerDay,
       shiftId: data.shiftId ?? null,
+      rotationWeeks: data.rotationWeeks ?? null,
+      maxConsecutiveTurns: data.maxConsecutiveTurns ?? null,
       isDefault: data.isDefault,
     });
 
@@ -772,6 +815,8 @@ export const hrService = {
 
     const updated = await hrRepository.updateWorkPattern(workPatternId, {
       ...changes,
+      rotationWeeks: changes.rotationWeeks ?? null,
+      maxConsecutiveTurns: changes.maxConsecutiveTurns ?? null,
       workingDayIndexes: unique(changes.workingDayIndexes),
     });
 
@@ -779,6 +824,914 @@ export const hrService = {
       await hrRepository.clearDefaultWorkPattern(workPatternId);
     }
     return updated;
+  },
+
+  // -- Rotation -------------------------------------------------------------
+
+  /**
+   * Everybody, where they stand, and whether it has gone on too long.
+   *
+   * One call rather than a query per person, because this is the whole payroll
+   * on one screen and the fairness figure for each of them is the point of
+   * opening it.
+   */
+  async assignmentBoard() {
+    await requirePermission("hr.roster.view");
+
+    const employees = await hrRepository.listAssignableEmployees();
+    if (employees.length === 0) return [];
+
+    const turns = await hrRepository.turnsFor(employees.map((row) => row.id));
+    const today = startOfUtcDay(new Date());
+
+    /*
+     * Anybody without a pattern of their own works the tenant's default, and
+     * the board has to say which one that is. Reporting them as "default
+     * pattern" would hide both the days they work and the fairness limit the
+     * default carries — and a screen about who works what should not be the
+     * one place that declines to answer.
+     */
+    const fallback = await hrRepository.findDefaultWorkPattern();
+
+    return employees.map((employee) => {
+      // Newest first, as the repository returned them.
+      const theirs = turns.filter((turn) => turn.employeeId === employee.id);
+      const taken = theirs.filter((turn) => turn.appliedAt !== null);
+      const upcoming = theirs
+        .filter((turn) => turn.appliedAt === null)
+        .sort((a, b) => a.startsOn.getTime() - b.startsOn.getTime())[0];
+
+      /*
+       * The run is counted from turns recorded here, not from the pattern the
+       * employee record happens to point at. Somebody put on nights by hand
+       * before this screen existed has no turns behind them and starts at
+       * zero — which under-counts, and is the right way round to be wrong: the
+       * watch should not accuse anybody on the strength of a history it never
+       * saw.
+       */
+      const current = taken[0] ?? null;
+      const pattern = employee.workPattern ?? fallback;
+      const run = employee.workPatternId
+        ? consecutiveTurns(taken, employee.workPatternId)
+        : 0;
+      const limit = pattern?.maxConsecutiveTurns ?? null;
+
+      return {
+        id: employee.id,
+        name: `${employee.firstName} ${employee.lastName}`,
+        employeeNumber: employee.employeeNumber,
+        jobTitle: employee.jobTitle,
+        department: employee.department,
+        patternId: employee.workPatternId,
+        patternName: pattern?.name ?? null,
+        /** True when it is the tenant's default rather than their own. */
+        onDefaultPattern: employee.workPatternId === null,
+        // Their own override, or the hours the pattern is worked on.
+        shiftName: employee.shift?.name ?? pattern?.shift?.name ?? null,
+        since: current?.startsOn ?? null,
+        until: current?.endsOn ?? null,
+        turns: run,
+        limit,
+        concern: fairnessConcern({
+          employeeName: `${employee.firstName} ${employee.lastName}`,
+          patternName: pattern?.name ?? "this pattern",
+          turns: run,
+          limit,
+        }),
+        next: upcoming
+          ? {
+              id: upcoming.id,
+              startsOn: upcoming.startsOn,
+              endsOn: upcoming.endsOn,
+              patternName: upcoming.workPattern.name,
+              shiftName: upcoming.shift?.name ?? null,
+              /* Its day has come and it has not taken effect — the overnight
+               * job has not run yet, or did not run at all. The screen says
+               * so and offers the button rather than writing on a page load. */
+              due: startOfUtcDay(upcoming.startsOn) <= today,
+            }
+          : null,
+      };
+    });
+  },
+
+  /**
+   * Putting a group of people on a pattern.
+   *
+   * The fairness rule is checked here and reported back; it never refuses.
+   * That is a decision rather than an oversight — see `rotation.ts`. A foreman
+   * who cannot record that Refilwe is on nights again will staff the shift
+   * anyway and leave the system wrong, and a system that is wrong about who is
+   * on nights cannot tell anybody they have had too many.
+   */
+  async assignPatterns(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const data = assignPatternsSchema.parse(input);
+
+    const pattern = await hrRepository.findWorkPattern(data.workPatternId);
+    if (!pattern) throw new NotFoundError("Work pattern");
+    if (!pattern.isActive) {
+      throw new BusinessRuleError(
+        `${pattern.name} has been retired. Choose a pattern that is still in use.`,
+      );
+    }
+
+    if (data.shiftId) {
+      const shift = await hrRepository.findShift(data.shiftId);
+      if (!shift) throw new NotFoundError("Shift");
+      if (!shift.isActive) {
+        throw new BusinessRuleError(`${shift.name} has been retired.`);
+      }
+    }
+
+    const startsOn = startOfUtcDay(data.startsOn);
+    const endsOn = data.weeks ? turnEndsOn(startsOn, data.weeks) : null;
+    const today = startOfUtcDay(new Date());
+    const takesEffectNow = startsOn <= today;
+
+    const everybody = await hrRepository.listAssignableEmployees();
+    const chosen = everybody.filter((row) => data.employeeIds.includes(row.id));
+    if (chosen.length !== data.employeeIds.length) {
+      throw new NotFoundError("Employee");
+    }
+
+    const history = await hrRepository.turnsFor(data.employeeIds);
+    const concerns: string[] = [];
+
+    for (const employee of chosen) {
+      const prior = history.filter(
+        (turn) =>
+          turn.employeeId === employee.id &&
+          turn.appliedAt !== null &&
+          startOfUtcDay(turn.startsOn) < startsOn,
+      );
+
+      const concern = fairnessConcern({
+        employeeName: `${employee.firstName} ${employee.lastName}`,
+        patternName: pattern.name,
+        // The turn being assigned is the one that might tip it over.
+        turns: consecutiveTurns(prior, pattern.id) + 1,
+        limit: pattern.maxConsecutiveTurns,
+      });
+      if (concern) concerns.push(concern);
+
+      await hrRepository.closeTurnsBefore(
+        employee.id,
+        startsOn,
+        dayBefore(startsOn),
+      );
+      await hrRepository.supersedeTurnsOn(employee.id, startsOn);
+
+      const turn = await hrRepository.createPatternAssignment({
+        employeeId: employee.id,
+        workPatternId: pattern.id,
+        shiftId: data.shiftId ?? null,
+        startsOn,
+        endsOn,
+        note: data.note,
+        appliedAt: takesEffectNow ? new Date() : null,
+      });
+
+      if (takesEffectNow) {
+        await hrRepository.setEmployeePattern(employee.id, {
+          workPatternId: pattern.id,
+          shiftId: data.shiftId ?? null,
+        });
+      } else {
+        // Nothing to do until the day arrives; `applyDueTurns` picks it up.
+        void turn;
+      }
+    }
+
+    return {
+      assigned: chosen.length,
+      takesEffectNow,
+      startsOn,
+      endsOn,
+      concerns,
+    };
+  },
+
+  /**
+   * Moves people onto turns whose start date has arrived.
+   *
+   * A turn written for next month has to take effect without anybody
+   * remembering, which is a job rather than a page load: `pnpm hr:rotate` runs
+   * it every morning. The rotation screen shows anything due that has not been
+   * applied and offers a button for it, so a skipped run is visible and
+   * fixable — rendering a page does not quietly write to the database.
+   *
+   * A turn that *ends* with nothing written after it leaves the person exactly
+   * where they are. The end date is a plan, not a revocation — reverting them
+   * to a pattern nobody chose would be the system inventing a decision, and on
+   * the morning after a rotation ends that decision is somebody's shift.
+   */
+  async applyDueTurns(asOf = new Date()) {
+    await requirePermission("hr.roster.manage");
+    return this.applyDueTurnsWithoutPermissionCheck(asOf);
+  },
+
+  /** The same, for the scheduled runner, which has no user to check. */
+  async applyDueTurnsWithoutPermissionCheck(asOf = new Date()) {
+    const due = await hrRepository.dueTurns(startOfUtcDay(asOf));
+    const applied: string[] = [];
+
+    for (const turn of due) {
+      await hrRepository.setEmployeePattern(turn.employeeId, {
+        workPatternId: turn.workPatternId,
+        shiftId: turn.shiftId,
+      });
+      await hrRepository.updatePatternAssignment(turn.id, {
+        appliedAt: new Date(),
+      });
+      applied.push(`${turn.employee.firstName} ${turn.employee.lastName}`);
+    }
+
+    return { applied };
+  },
+
+  /**
+   * Calls off a turn that has not started yet.
+   *
+   * One that has taken effect is history, and history is not edited: the way
+   * to change what somebody is working now is to assign them something else,
+   * which leaves both facts in the record.
+   */
+  async cancelTurn(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const { assignmentId } = cancelTurnSchema.parse(input);
+
+    const turn = await hrRepository.findPatternAssignment(assignmentId);
+    if (!turn) throw new NotFoundError("Assignment");
+    if (turn.appliedAt) {
+      throw new BusinessRuleError(
+        "This turn has already started. Assign a new pattern instead of removing it.",
+      );
+    }
+
+    await hrRepository.deletePatternAssignment(assignmentId);
+    return { employeeId: turn.employeeId };
+  },
+
+  /**
+   * One person's month, day by day.
+   *
+   * The roster answers "who is on site this week", which is a foreman's
+   * question. This answers "what am I working next month", which is the
+   * question the person themselves asks — and which, until now, nothing in the
+   * system would answer without four screens and some mental arithmetic.
+   *
+   * Each day is resolved from the turn in force *on that day* rather than from
+   * the pattern the employee record currently points at. A month containing a
+   * rotation change is the whole reason the turns are stored: on the 14th they
+   * were on days and on the 15th they are on nights, and a calendar that
+   * flattens that is wrong for half the month.
+   */
+  async monthFor(employeeId: string, year: number, month: number) {
+    await this.assertMaySeeEmployee(employeeId);
+
+    const employee = await hrRepository.findEmployee(employeeId);
+    if (!employee) throw new NotFoundError("Employee");
+
+    // `month` is 1-based, as anybody typing a date would write it. Day 0 of
+    // the next month is the last day of this one, leap years included.
+    const from = new Date(Date.UTC(year, month - 1, 1));
+    const to = new Date(Date.UTC(year, month, 0));
+
+    const [holidays, turns, placements, leave] = await Promise.all([
+      hrRepository.listHolidays(from, to),
+      hrRepository.turnsFor([employeeId]),
+      hrRepository.listAssignments(from, to, { employeeId }),
+      hrRepository.listLeaveRequests({ employeeId }),
+    ]);
+
+    const holidayNames = new Map(
+      holidays.map((holiday) => [isoDate(holiday.observedOn), holiday.name]),
+    );
+    const standing = await this.patternForEmployee(employee);
+    const relevantLeave = leave.filter(
+      (request) =>
+        request.startsAt <= to &&
+        request.endsAt >= from &&
+        (request.status === "SUBMITTED" || request.status === "APPROVED"),
+    );
+
+    const days = [];
+    for (
+      const day = new Date(from);
+      day <= to;
+      day.setUTCDate(day.getUTCDate() + 1)
+    ) {
+      const on = new Date(day);
+      const iso = isoDate(on);
+
+      /*
+       * Every turn, including ones that have not started yet: a turn written
+       * for the 15th is the answer for the 15th, and a calendar somebody opens
+       * to see what they are working next month is precisely where a planned
+       * rotation should already show.
+       */
+      const turn = turnInForce(turns, on);
+      const pattern = turn
+        ? {
+            cycleDays: turn.workPattern.cycleDays,
+            workingDayIndexes: turn.workPattern.workingDayIndexes,
+            anchorOn: turn.workPattern.anchorOn,
+          }
+        : standing;
+
+      const holiday = holidayNames.get(iso) ?? null;
+      const due = worksOn(pattern, on) && !holiday;
+
+      /*
+       * Leave only counts on a day they would have worked. A request that
+       * spans a Sunday covers the Sunday, but nothing was spent on it and
+       * colouring it as leave says otherwise — the same rule the day count
+       * has always used, applied to the calendar so the two agree.
+       */
+      const booked = due
+        ? relevantLeave.find(
+            (request) => request.startsAt <= on && request.endsAt >= on,
+          )
+        : undefined;
+      const placement = placements.find(
+        (row) => row.startsAt <= on && row.endsAt >= on,
+      );
+      // Their own shift beats the pattern's, exactly as the rotation writes it.
+      const shift =
+        turn?.shift ??
+        turn?.workPattern.shift ??
+        employee.shift ??
+        employee.workPattern?.shift ??
+        null;
+
+      days.push({
+        date: iso,
+        due,
+        holiday,
+        patternName: turn?.workPattern.name ?? employee.workPattern?.name ?? null,
+        shift: shift
+          ? { name: shift.name, hours: describeShift(shift), worked: workedHours(shift) }
+          : null,
+        leave: booked
+          ? {
+              status: booked.status,
+              typeName: booked.leaveType.name,
+              reference: booked.reference,
+            }
+          : null,
+        placement: placement
+          ? {
+              projectName: placement.project?.name ?? null,
+              note: placement.note,
+            }
+          : null,
+      });
+    }
+
+    // Due, less the days they are away: the days somebody expects them.
+    const working = days.filter((day) => day.due && !day.leave);
+
+    return {
+      employee: {
+        id: employee.id,
+        name: `${employee.firstName} ${employee.lastName}`,
+        jobTitle: employee.jobTitle,
+        employeeNumber: employee.employeeNumber,
+      },
+      from,
+      to,
+      days,
+      totals: {
+        due: working.length,
+        // Hours only where a shift says how long a day is. A pattern with no
+        // shift is an office week nobody clocks, and inventing eight hours
+        // for it would put a number on a screen that nothing stands behind.
+        hours: working.reduce((sum, day) => sum + (day.shift?.worked ?? 0), 0),
+        onLeave: days.filter((day) => day.leave).length,
+        holidays: days.filter((day) => day.holiday).length,
+        placed: days.filter((day) => day.placement).length,
+      },
+    };
+  },
+
+  // -- Timesheets -----------------------------------------------------------
+
+  /**
+   * Clocking somebody on.
+   *
+   * Your own needs `hr.timesheet.record`, which everybody has. Anybody else's
+   * needs `hr.timesheet.manage`, because on a site most of the crew have no
+   * login and the foreman clocks them in — and because the alternative to
+   * letting him is a paper book that never reaches payroll.
+   */
+  async clockIn(input: unknown) {
+    const data = clockInSchema.parse(input);
+    await this.assertMayRecordFor(data.employeeId);
+
+    const employee = await hrRepository.findEmployee(data.employeeId);
+    if (!employee) throw new NotFoundError("Employee");
+    if (employee.status === "EXITED") {
+      throw new BusinessRuleError("That employee has left.");
+    }
+
+    const open = await hrRepository.openTimeEntry(data.employeeId);
+    if (open) {
+      throw new BusinessRuleError(
+        `${employee.firstName} is already clocked in, since ${describeMoment(open.clockedInAt)}. Clock out first.`,
+      );
+    }
+
+    const at = data.at ?? new Date();
+    const workedOn = workingDayOf(at);
+
+    /*
+     * The shift and the site are copied from the plan at the moment of
+     * clocking in rather than read back later. A roster that is rewritten next
+     * week must not change what somebody's Tuesday was measured against —
+     * a timesheet is a record of what happened, and its comparison has to be
+     * as fixed as the times are.
+     */
+    const turn = turnInForce(
+      await hrRepository.turnsFor([data.employeeId]),
+      workedOn,
+    );
+    const placement = (
+      await hrRepository.listAssignments(workedOn, workedOn, {
+        employeeId: data.employeeId,
+      })
+    )[0];
+
+    return hrRepository.createTimeEntry({
+      employeeId: data.employeeId,
+      workedOn,
+      clockedInAt: at,
+      projectId: data.projectId ?? placement?.projectId ?? null,
+      shiftId:
+        turn?.shiftId ??
+        turn?.workPattern.shift?.id ??
+        employee.shiftId ??
+        employee.workPattern?.shiftId ??
+        null,
+      note: data.note,
+    });
+  },
+
+  async clockOut(input: unknown) {
+    const data = clockOutSchema.parse(input);
+    await this.assertMayRecordFor(data.employeeId);
+
+    const open = await hrRepository.openTimeEntry(data.employeeId);
+    if (!open) {
+      throw new BusinessRuleError("They are not clocked in.");
+    }
+
+    const at = data.at ?? new Date();
+    if (at <= open.clockedInAt) {
+      throw new BusinessRuleError("They clocked out before they clocked in.");
+    }
+
+    return hrRepository.updateTimeEntry(open.id, {
+      clockedOutAt: at,
+      breakMinutes: data.breakMinutes,
+      note: data.note ?? open.note,
+    });
+  },
+
+  /**
+   * Fixing an entry after the fact.
+   *
+   * An approved entry is not edited. Payroll has been run against it and
+   * rewriting it silently changes a figure somebody has already been paid; the
+   * way to correct one after approval is to unapprove it deliberately, which
+   * leaves both facts in the audit trail.
+   */
+  async correctTimeEntry(input: unknown) {
+    await requirePermission("hr.timesheet.manage");
+    const data = correctTimeEntrySchema.parse(input);
+
+    const entry = await hrRepository.findTimeEntry(data.entryId);
+    if (!entry) throw new NotFoundError("Time entry");
+    if (entry.approvedAt) {
+      throw new BusinessRuleError(
+        "That entry has been signed off. Withdraw the approval before changing it.",
+      );
+    }
+
+    const workedOn = workingDayOf(data.clockedInAt);
+    const sameDay = await hrRepository.timeEntriesOn(entry.employeeId, workedOn);
+    const clash = sameDay.find(
+      (other) =>
+        other.id !== entry.id &&
+        overlaps(other, {
+          clockedInAt: data.clockedInAt,
+          clockedOutAt: data.clockedOutAt ?? null,
+          breakMinutes: data.breakMinutes,
+        }),
+    );
+    if (clash) {
+      throw new BusinessRuleError(
+        "That overlaps another entry on the same day. Nobody is at work twice at once.",
+      );
+    }
+
+    return hrRepository.updateTimeEntry(data.entryId, {
+      workedOn,
+      clockedInAt: data.clockedInAt,
+      clockedOutAt: data.clockedOutAt ?? null,
+      breakMinutes: data.breakMinutes,
+      note: data.reason,
+    });
+  },
+
+  /**
+   * Signing entries off for payroll.
+   *
+   * A separate permission from recording them, because approving what you
+   * yourself typed is how a timesheet becomes a payment nobody checked. The
+   * service refuses an entry that is still running for the plainer reason that
+   * nobody knows yet how long it was.
+   */
+  async approveTimeEntries(input: unknown) {
+    const actorId = await requirePermission("hr.timesheet.approve");
+    const { entryIds } = approveTimeEntriesSchema.parse(input);
+
+    const approved: string[] = [];
+    for (const entryId of entryIds) {
+      const entry = await hrRepository.findTimeEntry(entryId);
+      if (!entry) throw new NotFoundError("Time entry");
+      if (entry.approvedAt) continue;
+      if (!entry.clockedOutAt) {
+        throw new BusinessRuleError(
+          "One of those is still running. It cannot be signed off until it has an end.",
+        );
+      }
+
+      await hrRepository.updateTimeEntry(entryId, {
+        approvedAt: new Date(),
+        approvedById: actorId,
+      });
+      approved.push(entryId);
+    }
+
+    return { approved: approved.length };
+  },
+
+  async withdrawApproval(entryId: string) {
+    await requirePermission("hr.timesheet.approve");
+    const entry = await hrRepository.findTimeEntry(entryId);
+    if (!entry) throw new NotFoundError("Time entry");
+
+    return hrRepository.updateTimeEntry(entryId, {
+      approvedAt: null,
+      approvedById: null,
+    });
+  },
+
+  /** Whoever is on the clock at this moment. */
+  async whoIsOnTheClock() {
+    await requirePermission("hr.timesheet.view");
+    const open = await hrRepository.openTimeEntries();
+
+    return open.map((entry) => ({
+      id: entry.id,
+      employeeId: entry.employeeId,
+      name: `${entry.employee.firstName} ${entry.employee.lastName}`,
+      since: entry.clockedInAt,
+      minutesSoFar: minutesSoFar(entry),
+      projectName: entry.project?.name ?? null,
+      shiftName: entry.shift?.name ?? null,
+      /** Running longer than anybody works: probably nobody clocked out. */
+      looksForgotten: looksUnclosed(entry),
+    }));
+  },
+
+  /** One person's own open entry, for the clock on their own screen. */
+  async myOpenEntry() {
+    const mine = await this.myEmployeeId();
+    if (!mine) return null;
+
+    const open = await hrRepository.openTimeEntry(mine);
+    if (!open) return { employeeId: mine, entry: null };
+
+    return {
+      employeeId: mine,
+      entry: {
+        id: open.id,
+        since: open.clockedInAt,
+        minutesSoFar: minutesSoFar(open),
+        projectName: open.project?.name ?? null,
+        shiftName: open.shift?.name ?? null,
+      },
+    };
+  },
+
+  /**
+   * A week of somebody's card, or of everybody's.
+   *
+   * The variance against the shift is computed here rather than stored,
+   * because a stored total is one more figure that can disagree with the times
+   * beside it — and the times are what a dispute is actually about.
+   */
+  async timesheetFor(from: Date, to: Date, filter?: { employeeId?: string }) {
+    if (filter?.employeeId) {
+      await this.assertMaySeeEmployee(filter.employeeId);
+    } else {
+      await requirePermission("hr.timesheet.view");
+    }
+
+    const entries = await hrRepository.listTimeEntries(
+      startOfUtcDay(from),
+      startOfUtcDay(to),
+      filter,
+    );
+
+    const rows = entries.map((entry) => ({
+      id: entry.id,
+      employeeId: entry.employeeId,
+      name: `${entry.employee.firstName} ${entry.employee.lastName}`,
+      workedOn: entry.workedOn,
+      clockedInAt: entry.clockedInAt,
+      clockedOutAt: entry.clockedOutAt,
+      breakMinutes: entry.breakMinutes,
+      minutes: minutesWorked(entry),
+      projectName: entry.project?.name ?? null,
+      shiftName: entry.shift?.name ?? null,
+      overtime: overtimeAgainst(entry, entry.shift),
+      undertime: entry.clockedOutAt ? undertimeAgainst(entry, entry.shift) : 0,
+      approvedAt: entry.approvedAt,
+      approvedBy: entry.approvedBy
+        ? `${entry.approvedBy.firstName} ${entry.approvedBy.lastName}`
+        : null,
+      running: entry.clockedOutAt === null,
+      looksForgotten: looksUnclosed(entry),
+      note: entry.note,
+    }));
+
+    return {
+      rows,
+      totals: {
+        minutes: rows.reduce((sum, row) => sum + row.minutes, 0),
+        overtime: rows.reduce((sum, row) => sum + row.overtime, 0),
+        awaiting: rows.filter((row) => !row.approvedAt && !row.running).length,
+        running: rows.filter((row) => row.running).length,
+      },
+    };
+  },
+
+  /**
+   * Whether the signed-in person may clock this employee.
+   *
+   * Yourself always; anybody else only with `hr.timesheet.manage`. Kept beside
+   * the other self-service check rather than inside each method, because the
+   * rule is the same one in three places and a copy is where it drifts.
+   */
+  async assertMayRecordFor(employeeId: string) {
+    const mine = await this.myEmployeeId();
+    if (mine && mine === employeeId) {
+      await requirePermission("hr.timesheet.record");
+      return;
+    }
+    await requirePermission("hr.timesheet.manage");
+  },
+
+  // -- Staffing and coverage ------------------------------------------------
+
+  async listStaffingRules(includeInactive = false) {
+    await requirePermission("hr.roster.view");
+    return hrRepository.listStaffingRules(includeInactive);
+  },
+
+  async createStaffingRule(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const data = createStaffingRuleSchema.parse(input);
+
+    return hrRepository.createStaffingRule({
+      name: data.name,
+      projectId: data.projectId ?? null,
+      department: data.department || null,
+      shiftId: data.shiftId ?? null,
+      weekdays: unique(data.weekdays),
+      minimumPeople: data.minimumPeople,
+      maximumPeople: data.maximumPeople ?? null,
+    });
+  },
+
+  async updateStaffingRule(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const { ruleId, ...changes } = updateStaffingRuleSchema.parse(input);
+
+    const rule = await hrRepository.findStaffingRule(ruleId);
+    if (!rule) throw new NotFoundError("Staffing rule");
+
+    return hrRepository.updateStaffingRule(ruleId, {
+      ...changes,
+      projectId: changes.projectId ?? null,
+      department: changes.department || null,
+      shiftId: changes.shiftId ?? null,
+      weekdays: unique(changes.weekdays),
+      maximumPeople: changes.maximumPeople ?? null,
+    });
+  },
+
+  async removeStaffingRule(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const { ruleId } = removeStaffingRuleSchema.parse(input);
+
+    const rule = await hrRepository.findStaffingRule(ruleId);
+    if (!rule) throw new NotFoundError("Staffing rule");
+
+    await hrRepository.deleteStaffingRule(ruleId);
+    return { ruleId };
+  },
+
+  /**
+   * Whether each rule is being met, day by day across a window.
+   *
+   * Everything needed is fetched once and the comparison is done in memory:
+   * a query per rule per day would be forty round trips to answer one screen,
+   * and the numbers all come from the same four facts — who is due in, who is
+   * away, where they are placed, and what hours they work.
+   *
+   * Somebody counts towards a rule on a day when their pattern says they are
+   * working it, the company is not closed, their leave has not been approved,
+   * and the narrowing the rule asks for — a site, a department, a shift —
+   * matches. Leave that is only *requested* does not remove them, because it
+   * has not been granted; it is reported separately, since "we are fine unless
+   * you approve that" is exactly what the person approving it needs to know.
+   */
+  async coverageFor(from: Date, to: Date) {
+    await requirePermission("hr.roster.view");
+
+    const rules = await hrRepository.listStaffingRules();
+    const employees = await hrRepository.listEmployees(["ACTIVE", "ON_LEAVE"]);
+
+    const [holidays, turns, placements, leave, fallback] = await Promise.all([
+      this.holidayDatesBetween(from, to),
+      employees.length
+        ? hrRepository.turnsFor(employees.map((row) => row.id))
+        : Promise.resolve([]),
+      hrRepository.listAssignments(from, to),
+      hrRepository.listLeaveRequests({ status: ["APPROVED", "SUBMITTED"] }),
+      hrRepository.findDefaultWorkPattern(),
+    ]);
+
+    const days: string[] = [];
+    for (
+      const cursor = startOfUtcDay(from);
+      cursor <= startOfUtcDay(to);
+      cursor.setUTCDate(cursor.getUTCDate() + 1)
+    ) {
+      days.push(isoDate(cursor));
+    }
+
+    /** Who is available on each day, with what the rules narrow by. */
+    const availability = days.map((iso) => {
+      const on = new Date(`${iso}T00:00:00.000Z`);
+
+      return employees
+        .map((employee) => {
+          const turn = turnInForce(
+            turns.filter((row) => row.employeeId === employee.id),
+            on,
+          );
+          const pattern = turn
+            ? {
+                cycleDays: turn.workPattern.cycleDays,
+                workingDayIndexes: turn.workPattern.workingDayIndexes,
+                anchorOn: turn.workPattern.anchorOn,
+              }
+            : employee.workPattern
+              ? {
+                  cycleDays: employee.workPattern.cycleDays,
+                  workingDayIndexes: employee.workPattern.workingDayIndexes,
+                  anchorOn: employee.workPattern.anchorOn,
+                }
+              : fallback
+                ? {
+                    cycleDays: fallback.cycleDays,
+                    workingDayIndexes: fallback.workingDayIndexes,
+                    anchorOn: fallback.anchorOn,
+                  }
+                : DEFAULT_PATTERN;
+
+          const due = worksOn(pattern, on) && !holidays.has(iso);
+          const theirLeave = leave.find(
+            (request) =>
+              request.employeeId === employee.id &&
+              request.startsAt <= on &&
+              request.endsAt >= on,
+          );
+
+          return {
+            id: employee.id,
+            department: employee.department,
+            due,
+            away: theirLeave?.status === "APPROVED",
+            mightBeAway: theirLeave?.status === "SUBMITTED",
+            shiftId:
+              turn?.shiftId ??
+              turn?.workPattern.shift?.id ??
+              employee.shiftId ??
+              employee.workPattern?.shiftId ??
+              null,
+            projectIds: placements
+              .filter(
+                (row) =>
+                  row.employeeId === employee.id &&
+                  row.startsAt <= on &&
+                  row.endsAt >= on,
+              )
+              .map((row) => row.projectId),
+          };
+        })
+        .filter((person) => person.due);
+    });
+
+    const assessed = rules.map((rule) => {
+      const shape = {
+        minimumPeople: rule.minimumPeople,
+        maximumPeople: rule.maximumPeople,
+        weekdays: rule.weekdays,
+      };
+
+      const cells = days.map((iso, index) => {
+        const on = new Date(`${iso}T00:00:00.000Z`);
+
+        /*
+         * A day the company is closed is not a day it is short.
+         *
+         * Nobody is due in on a public holiday, so every rule would read zero
+         * against its minimum and the week would show a wall of red for a day
+         * that went exactly as intended. A holiday is reported as closed and
+         * left out of the verdict — the same treatment as a day the rule was
+         * never about. A site that genuinely must be manned through a holiday
+         * is a different arrangement, and this model cannot express it yet.
+         */
+        const closed = holidays.has(iso);
+        if (closed || !ruleAppliesOn(shape, on)) {
+          return {
+            date: iso,
+            applies: false,
+            closed,
+            actual: 0,
+            atRisk: 0,
+            coverage: "OK" as const,
+          };
+        }
+
+        const counted = availability[index].filter(
+          (person) =>
+            (!rule.department || person.department === rule.department) &&
+            (!rule.shiftId || person.shiftId === rule.shiftId) &&
+            (!rule.projectId || person.projectIds.includes(rule.projectId)),
+        );
+
+        const actual = counted.filter((person) => !person.away).length;
+        return {
+          date: iso,
+          applies: true,
+          closed: false,
+          actual,
+          /** People whose leave for this day is asked for but not granted. */
+          atRisk: counted.filter((person) => person.mightBeAway && !person.away).length,
+          coverage: assess(shape, actual),
+        };
+      });
+
+      const live = cells.filter((cell) => cell.applies);
+      return {
+        id: rule.id,
+        name: rule.name,
+        summary: describeRule(shape),
+        projectName: rule.project?.name ?? null,
+        department: rule.department,
+        shiftName: rule.shift?.name ?? null,
+        minimumPeople: rule.minimumPeople,
+        maximumPeople: rule.maximumPeople,
+        cells,
+        verdict: weekVerdict(live.map((cell) => cell.coverage)),
+        worstShortfall: Math.max(
+          0,
+          ...live.map((cell) => shortfall(shape, cell.actual)),
+        ),
+      };
+    });
+
+    return {
+      days,
+      rules: assessed,
+      totals: {
+        short: assessed.filter((rule) => rule.verdict === "SHORT").length,
+        over: assessed.filter((rule) => rule.verdict === "OVER").length,
+        /** Rule-days that are short, which is the size of the problem. */
+        shortDays: assessed.reduce(
+          (sum, rule) =>
+            sum + rule.cells.filter((cell) => cell.applies && cell.coverage === "SHORT").length,
+          0,
+        ),
+      },
+    };
   },
 
   // -- Roster ---------------------------------------------------------------
@@ -1007,6 +1960,54 @@ export const hrService = {
   },
 
   /**
+   * Who still has to sign one request off, and who already has.
+   *
+   * Null when no chain was configured for leave, which is how the whole
+   * feature stays optional: the screens fall back to "one approver decides",
+   * because that is what actually happens without a chain.
+   */
+  async approvalTrail(requestId: string) {
+    const request = await hrRepository.findLeaveRequest(requestId);
+    if (!request) throw new NotFoundError("Leave request");
+    await this.assertMaySeeEmployee(request.employeeId);
+
+    const trail = await approvalTrailFor("LEAVE_REQUEST", requestId);
+    if (!trail) return null;
+
+    const { userId } = requireRequestContext();
+    const myRoles = await hrRepository.roleIdsOf(userId);
+
+    return {
+      status: trail.status,
+      steps: trail.approvals.map((approval) => ({
+        id: approval.id,
+        name: approval.step.name,
+        status: approval.status,
+        approver:
+          approval.assignedToUser
+            ? `${approval.assignedToUser.firstName} ${approval.assignedToUser.lastName}`
+            : (approval.assignedToRole?.name ??
+              (approval.step.approverType === "MANAGER"
+                ? "Their manager — nobody on record"
+                : "Anybody who may approve leave")),
+        decidedBy: approval.decidedBy
+          ? `${approval.decidedBy.firstName} ${approval.decidedBy.lastName}`
+          : null,
+        decidedAt: approval.decidedAt,
+        comment: approval.comment,
+        /** Whether this rung is the signed-in person's to decide. */
+        isMine:
+          approval.status === "PENDING" &&
+          (approval.assignedToUserId === userId ||
+            (approval.assignedToRoleId !== null &&
+              myRoles.includes(approval.assignedToRoleId)) ||
+            (approval.assignedToUserId === null &&
+              approval.assignedToRoleId === null)),
+      })),
+    };
+  },
+
+  /**
    * Submitting a leave request.
    *
    * The balance is spent at submission rather than at approval. Checking only
@@ -1097,7 +2098,7 @@ export const hrService = {
       await hrRepository.addTakenDays(balance.id, days);
     }
 
-    return hrRepository.createLeaveRequest({
+    const request = await hrRepository.createLeaveRequest({
       reference: await nextReference("LV"),
       employeeId: data.employeeId,
       leaveTypeId: data.leaveTypeId,
@@ -1106,6 +2107,37 @@ export const hrService = {
       days,
       reason: data.reason,
     });
+
+    /*
+     * Who has to sign this off is configuration, not code (ADR-006). With no
+     * chain configured nothing starts and the request is decided by anybody
+     * holding `hr.leave.approve` — which is where leave was before, and is a
+     * perfectly good answer for a small company.
+     *
+     * The manager is resolved from the *employee's* reporting line rather than
+     * from whoever typed the request in. Most of a construction payroll has no
+     * login, so their leave is filed by HR, and reading the manager off the
+     * acting user would send a boilermaker's leave to the HR manager's manager.
+     */
+    const manager = employee.managerId
+      ? await hrRepository.findEmployee(employee.managerId)
+      : null;
+
+    await startWorkflow({
+      entityType: "LEAVE_REQUEST",
+      entityId: request.id,
+      triggerEvent: "leave.requested",
+      managerUserId: manager?.userId ?? null,
+      // What a chain can put a condition on: long absences can need a rung
+      // that a day off does not.
+      record: {
+        days,
+        leaveTypeCode: leaveType.code,
+        isPaid: String(leaveType.isPaid),
+      },
+    });
+
+    return request;
   },
 
   /**
@@ -1132,6 +2164,40 @@ export const hrService = {
     }
 
     const { userId } = requireRequestContext();
+
+    /*
+     * The chain, if the tenant has configured one.
+     *
+     * Holding `hr.leave.approve` says a person *can* approve leave; the chain
+     * says *which* approvals reach them and in what order. So the permission
+     * check above is necessary and, once a chain exists, not sufficient — the
+     * engine also insists the decision belongs to this person or their role,
+     * and that no earlier rung is still outstanding.
+     *
+     * A first approval on a two-step chain decides nothing about the request
+     * itself. It stays SUBMITTED and waits, which is the difference between a
+     * hierarchy and a queue of people who can each end it.
+     */
+    const approval = await pendingApprovalFor("LEAVE_REQUEST", request.id);
+
+    if (approval) {
+      const outcome = await decide({
+        approvalId: approval.id,
+        decision: data.decision,
+        comment: data.comment,
+        canDecide: async () => {
+          if (approval.instanceStartedById === userId) {
+            throw new ForbiddenError(
+              "You cannot approve a leave request you submitted.",
+            );
+          }
+        },
+      });
+
+      // Signed off at this rung, and still waiting at the next. Nothing about
+      // the request itself changes — that is what "hierarchy" means.
+      if (!outcome.isFinal) return request;
+    }
 
     // A rejection hands the days back; an approval has already spent them.
     if (data.decision === "REJECTED" && request.leaveType.daysPerCycle !== null) {
