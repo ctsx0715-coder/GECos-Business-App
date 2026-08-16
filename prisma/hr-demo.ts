@@ -1,7 +1,7 @@
 import { db } from "@/lib/database/client";
 import { nextReference } from "@/lib/database/reference-numbers";
-import { statutoryHolidays } from "@/modules/hr/public-holidays";
-import { PATTERN_ANCHOR } from "@/modules/hr/work-patterns";
+import { isoDate, statutoryHolidays } from "@/modules/hr/public-holidays";
+import { PATTERN_ANCHOR, worksOn } from "@/modules/hr/work-patterns";
 import type { ComplianceCategory, EmploymentType, LeaveAccrualMethod } from "@/generated/prisma/client";
 
 /**
@@ -327,8 +327,9 @@ export const LEAVE_REQUESTS: LeaveRequestSpec[] = [
   },
 ];
 
-function days(offset: number): Date {
-  const date = new Date();
+/** `offset` days from today, or from `base` when one is given, at UTC midnight. */
+function days(offset: number, base?: Date): Date {
+  const date = base ? new Date(base) : new Date();
   date.setUTCHours(0, 0, 0, 0);
   date.setUTCDate(date.getUTCDate() + offset);
   return date;
@@ -529,56 +530,86 @@ const TURNS: Array<{
  * right now. Hours relative to today, so a demonstration in March is not
  * looking at an empty week from November.
  */
-const TIME_ENTRIES: Array<{
+/**
+ * Who clocks on, and what an ordinary day looks like for them.
+ *
+ * The days themselves are generated from each person's work pattern over the
+ * last three weeks rather than listed, because listing them would be sixty
+ * rows that drift out of date the moment the demonstration is run in a
+ * different month — and because generating them from the pattern is the whole
+ * point: the six-day people show Saturdays and the rotation shows its week off
+ * without anybody typing that twice.
+ */
+const TIMESHEET_CREW: Array<{
   who: string;
-  startedDaysAgo: number;
   startsAtHour: number;
-  /** Hours on the clock. Null means they have not clocked out. */
-  hours: number | null;
+  hours: number;
+  breakMinutes: number;
+}> = [
+  { who: "Jacob Mthembu", startsAtHour: 7, hours: 9, breakMinutes: 60 },
+  { who: "Anele Dlamini", startsAtHour: 7, hours: 9, breakMinutes: 60 },
+  { who: "Nomsa Zulu", startsAtHour: 7, hours: 9, breakMinutes: 60 },
+  { who: "Katlego Sebego", startsAtHour: 7, hours: 9, breakMinutes: 60 },
+  { who: "Pieter van Wyk", startsAtHour: 18, hours: 12, breakMinutes: 60 },
+];
+
+/** How far back the generated timesheet goes. Three weeks covers a month-end. */
+const TIMESHEET_DAYS = 21;
+
+/**
+ * The days that are not ordinary, which are the ones the payroll screen exists
+ * to show: a Sunday call-out, a shift worked on a public holiday, a day long
+ * enough to break the BCEA's overtime ceiling, something nobody has signed
+ * for, and somebody still on the clock.
+ *
+ * Each is described by what makes it interesting rather than by a date, and
+ * the date is found in the window at seed time — a demonstration run in March
+ * should show a March Sunday, not an empty one from last August.
+ */
+const NOTABLE_SHIFTS: Array<{
+  who: string;
+  on: "SUNDAY" | "PUBLIC_HOLIDAY" | "LATEST_WORKDAY";
+  startsAtHour: number;
+  hours: number;
   breakMinutes: number;
   approved: boolean;
-  note?: string;
+  note: string;
 }> = [
   {
-    who: "Jacob Mthembu",
-    startedDaysAgo: 3,
-    startsAtHour: 7,
-    hours: 9,
-    breakMinutes: 60,
-    approved: true,
-  },
-  {
-    who: "Jacob Mthembu",
-    startedDaysAgo: 2,
-    startsAtHour: 7,
-    hours: 9,
-    breakMinutes: 60,
-    approved: true,
-  },
-  {
     who: "Anele Dlamini",
-    startedDaysAgo: 1,
+    on: "SUNDAY",
     startsAtHour: 7,
-    hours: 11,
+    hours: 6,
+    breakMinutes: 0,
+    approved: true,
+    note: "Sunday call-out — pump failure",
+  },
+  {
+    who: "Jacob Mthembu",
+    on: "PUBLIC_HOLIDAY",
+    startsAtHour: 7,
+    hours: 8,
     breakMinutes: 60,
-    approved: false,
-    note: "Concrete pour ran late",
+    approved: true,
+    note: "Worked the public holiday to keep the fabrication on programme",
   },
   {
     who: "Pieter van Wyk",
-    startedDaysAgo: 2,
-    startsAtHour: 18,
-    hours: 12,
+    on: "LATEST_WORKDAY",
+    startsAtHour: 5,
+    hours: 14,
     breakMinutes: 60,
-    approved: false,
+    approved: true,
+    note: "Thirteen hours on the clock — past what the BCEA allows",
   },
   {
-    who: "Katlego Sebego",
-    startedDaysAgo: 0,
-    startsAtHour: -3,
-    hours: null,
+    who: "Nomsa Zulu",
+    on: "LATEST_WORKDAY",
+    startsAtHour: 14,
+    hours: 4,
     breakMinutes: 0,
     approved: false,
+    note: "Site office stocktake — nobody has signed for it yet",
   },
 ];
 
@@ -1109,43 +1140,50 @@ export async function seedHrDemo(params: {
   }
 
   // ---- Time worked --------------------------------------------------------
-  // The shift is copied from the person's pattern at the moment they clock in,
-  // exactly as the service does it, so the demonstration's variance figures
-  // are computed the same way a real one would be.
-  for (const spec of TIME_ENTRIES) {
-    const employeeId = employeeIds[spec.who];
-    if (!employeeId) continue;
+  /*
+   * Three weeks of clock-ins, generated from each person's own pattern rather
+   * than listed. That is the only way the demonstration stays true when it is
+   * run in a different month, and it means the six-day people show their
+   * Saturdays and the plant operator shows his week off without any of it
+   * being typed twice.
+   *
+   * The shift is read from the person exactly as the service reads it at
+   * clock-in, so every variance figure on the screen is computed the way a
+   * real one would be.
+   */
+  const workedDays = await db.publicHoliday.findMany({
+    where: { observedOn: { gte: days(-TIMESHEET_DAYS), lte: days(0) } },
+    select: { observedOn: true },
+  });
+  const holidayDays = new Set(workedDays.map((row) => isoDate(row.observedOn)));
 
-    const clockedInAt = new Date();
-    if (spec.startsAtHour < 0) {
-      // Negative means "this many hours ago", for somebody still on the clock.
-      clockedInAt.setUTCHours(clockedInAt.getUTCHours() + spec.startsAtHour, 0, 0, 0);
-    } else {
-      clockedInAt.setUTCDate(clockedInAt.getUTCDate() - spec.startedDaysAgo);
-      clockedInAt.setUTCHours(spec.startsAtHour, 0, 0, 0);
-    }
+  async function clockOn(spec: {
+    employeeId: string;
+    on: Date;
+    startsAtHour: number;
+    hours: number | null;
+    breakMinutes: number;
+    approved: boolean;
+    note?: string;
+  }) {
+    const clockedInAt = new Date(spec.on);
+    clockedInAt.setUTCHours(spec.startsAtHour, 0, 0, 0);
 
     const already = await db.timeEntry.findFirst({
-      where: { employeeId, clockedInAt },
+      where: { employeeId: spec.employeeId, clockedInAt },
     });
-    if (already) continue;
+    if (already) return;
 
     const employee = await db.employee.findUnique({
-      where: { id: employeeId },
+      where: { id: spec.employeeId },
       select: { shiftId: true, workPattern: { select: { shiftId: true } } },
     });
 
     await db.timeEntry.create({
       data: {
         organisationId,
-        employeeId,
-        workedOn: new Date(
-          Date.UTC(
-            clockedInAt.getUTCFullYear(),
-            clockedInAt.getUTCMonth(),
-            clockedInAt.getUTCDate(),
-          ),
-        ),
+        employeeId: spec.employeeId,
+        workedOn: days(0, spec.on),
         clockedInAt,
         clockedOutAt:
           spec.hours === null
@@ -1160,6 +1198,106 @@ export async function seedHrDemo(params: {
       },
     });
     summary.timeEntries += 1;
+  }
+
+  for (const spec of TIMESHEET_CREW) {
+    const employeeId = employeeIds[spec.who];
+    if (!employeeId) continue;
+
+    const patternSpec =
+      WORK_PATTERNS.find(
+        (pattern) => pattern.code === PATTERN_BY_PERSON[spec.who],
+      ) ?? WORK_PATTERNS.find((pattern) => pattern.isDefault);
+    if (!patternSpec) continue;
+
+    const pattern = {
+      cycleDays: patternSpec.cycleDays,
+      workingDayIndexes: patternSpec.workingDayIndexes,
+      anchorOn: PATTERN_ANCHOR,
+    };
+
+    // Yesterday backwards: today is left alone so somebody can still be on the
+    // clock, and so a demonstration never shows a day that has not happened.
+    for (let daysAgo = 1; daysAgo <= TIMESHEET_DAYS; daysAgo += 1) {
+      const on = days(-daysAgo);
+      if (!worksOn(pattern, on)) continue;
+      if (holidayDays.has(isoDate(on))) continue;
+
+      await clockOn({
+        employeeId,
+        on,
+        startsAtHour: spec.startsAtHour,
+        hours: spec.hours,
+        breakMinutes: spec.breakMinutes,
+        approved: true,
+      });
+    }
+  }
+
+  for (const spec of NOTABLE_SHIFTS) {
+    const employeeId = employeeIds[spec.who];
+    if (!employeeId) continue;
+
+    // The date is found in the window rather than written down, so a March
+    // demonstration shows a March Sunday.
+    let on: Date | null = null;
+    for (let daysAgo = 1; daysAgo <= TIMESHEET_DAYS && !on; daysAgo += 1) {
+      const candidate = days(-daysAgo);
+      const iso = isoDate(candidate);
+
+      if (spec.on === "SUNDAY" && candidate.getUTCDay() === 0) on = candidate;
+      if (spec.on === "PUBLIC_HOLIDAY" && holidayDays.has(iso)) on = candidate;
+      if (
+        spec.on === "LATEST_WORKDAY" &&
+        candidate.getUTCDay() !== 0 &&
+        !holidayDays.has(iso)
+      ) {
+        on = candidate;
+      }
+    }
+    if (!on) continue;
+
+    /*
+     * A notable shift replaces the ordinary one generated for that day —
+     * otherwise Pieter's fourteen hours would sit on top of his twelve and the
+     * screen would report a day nobody could have worked.
+     */
+    await db.timeEntry.deleteMany({ where: { employeeId, workedOn: on } });
+
+    await clockOn({
+      employeeId,
+      on,
+      startsAtHour: spec.startsAtHour,
+      hours: spec.hours,
+      breakMinutes: spec.breakMinutes,
+      approved: spec.approved,
+      note: spec.note,
+    });
+  }
+
+  // And somebody on the clock right now, which is what the timesheet screen
+  // opens on. Three hours ago, so the figure is not zero.
+  const onTheClock = employeeIds["Katlego Sebego"];
+  if (onTheClock) {
+    const since = new Date();
+    since.setUTCHours(since.getUTCHours() - 3, 0, 0, 0);
+    const already = await db.timeEntry.findFirst({
+      where: { employeeId: onTheClock, clockedOutAt: null },
+    });
+    if (!already) {
+      await db.timeEntry.create({
+        data: {
+          organisationId,
+          employeeId: onTheClock,
+          workedOn: days(0, since),
+          clockedInAt: since,
+          clockedOutAt: null,
+          breakMinutes: 0,
+          projectId: site?.id ?? null,
+        },
+      });
+      summary.timeEntries += 1;
+    }
   }
 
   // ---- Leave requests -----------------------------------------------------

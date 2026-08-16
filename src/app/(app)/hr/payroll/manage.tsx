@@ -59,10 +59,18 @@ export function PeriodPicker({ from, to }: { from: string; to: string }) {
         Show
       </button>
       <a
-        href={`/api/payroll?from=${from}&to=${to}`}
+        href={`/api/payroll/pdf?from=${from}&to=${to}`}
+        target="_blank"
+        rel="noreferrer"
         className="inline-flex h-9 items-center rounded-[10px] border border-accent bg-accent px-3 text-sm font-medium text-accent-foreground transition hover:opacity-90"
       >
-        Download CSV
+        Print / PDF
+      </a>
+      <a
+        href={`/api/payroll?from=${from}&to=${to}`}
+        className="inline-flex h-9 items-center rounded-[10px] border border-border px-3 text-sm font-medium transition hover:bg-surface-muted"
+      >
+        CSV for payroll
       </a>
     </div>
   );

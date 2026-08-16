@@ -30,7 +30,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 573 tests against a real database
+pnpm test                   # 579 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -319,10 +319,21 @@ Overtime past what the BCEA allows — 3 hours in a day, 10 in a week — is
 **reported and still paid**. The hours were worked, and withholding them would
 be a worse breach than the one being flagged.
 
-The export is CSV, in decimal hours, which is the one format VIP, Sage and
-SimplePay all take. `hr.payroll.export` is its own permission: the finance
-manager who runs the pay run holds it without being able to open the employee
-register, and the supervisor who signs timesheets off does not.
+Two exports, because they are for different readers and pretending one file
+can be both produces a spreadsheet nobody can read and a report no software
+can import:
+
+- **CSV**, in decimal hours — the one format VIP, Sage and SimplePay all take.
+- **PDF**, A4, with a signature block — the copy somebody signs and files.
+
+The PDF is drawn rather than rendered from HTML. Turning a page into a PDF
+means shipping a headless browser into a serverless function — tens of
+megabytes and a cold start measured in seconds — or laying it out by hand, and
+for a table with six columns the hand-drawn version has no runtime to go wrong.
+
+`hr.payroll.export` is its own permission: the finance manager who runs the pay
+run holds it without being able to open the employee register, and the
+supervisor who signs timesheets off does not.
 
 ### Coverage
 

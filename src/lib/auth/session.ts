@@ -41,6 +41,8 @@ export function demoAuthEnabled(): boolean {
 export interface Session {
   userId: string;
   organisationId: string;
+  /** The tenant's name, for anything that has to say whose data this is. */
+  organisationName: string;
   email: string;
   fullName: string;
   jobTitle: string | null;
@@ -73,6 +75,7 @@ export async function getSession(): Promise<Session | null> {
       firstName: true,
       lastName: true,
       jobTitle: true,
+      organisation: { select: { name: true } },
       roles: { select: { role: { select: { name: true, deletedAt: true } } } },
     },
   });
@@ -86,6 +89,7 @@ export async function getSession(): Promise<Session | null> {
   return {
     userId: user.id,
     organisationId: user.organisationId,
+    organisationName: user.organisation.name,
     email: user.email,
     fullName: `${user.firstName} ${user.lastName}`.trim(),
     jobTitle: user.jobTitle,
