@@ -628,6 +628,72 @@ export const hrRepository = {
     return db.leaveRequest.update({ where: { id }, data });
   },
 
+  // -- Time entries ---------------------------------------------------------
+
+  /** The stretch somebody is on right now, if they are on one. */
+  openTimeEntry(employeeId: string) {
+    return db.timeEntry.findFirst({
+      where: { employeeId, clockedOutAt: null },
+      orderBy: { clockedInAt: "desc" },
+      include: { shift: SHIFT_SUMMARY, project: { select: { id: true, name: true } } },
+    });
+  },
+
+  /** Everybody currently on the clock, for the supervisor's view. */
+  openTimeEntries() {
+    return db.timeEntry.findMany({
+      where: { clockedOutAt: null },
+      orderBy: { clockedInAt: "asc" },
+      include: {
+        employee: { select: EMPLOYEE_SUMMARY },
+        shift: SHIFT_SUMMARY,
+        project: { select: { id: true, name: true } },
+      },
+    });
+  },
+
+  listTimeEntries(from: Date, to: Date, filter?: { employeeId?: string }) {
+    return db.timeEntry.findMany({
+      where: {
+        workedOn: { gte: from, lte: to },
+        ...(filter?.employeeId ? { employeeId: filter.employeeId } : {}),
+      },
+      orderBy: [{ workedOn: "asc" }, { clockedInAt: "asc" }],
+      include: {
+        employee: { select: EMPLOYEE_SUMMARY },
+        shift: SHIFT_SUMMARY,
+        project: { select: { id: true, name: true } },
+        approvedBy: { select: { firstName: true, lastName: true } },
+      },
+    });
+  },
+
+  /** Everything that touches one day, for the overlap check. */
+  timeEntriesOn(employeeId: string, workedOn: Date) {
+    return db.timeEntry.findMany({
+      where: { employeeId, workedOn },
+      orderBy: { clockedInAt: "asc" },
+    });
+  },
+
+  findTimeEntry(id: string) {
+    return db.timeEntry.findUnique({ where: { id } });
+  },
+
+  createTimeEntry(
+    data: Omit<Prisma.TimeEntryUncheckedCreateInput, "organisationId">,
+  ) {
+    return db.timeEntry.create({ data: { ...data, organisationId: tenant() } });
+  },
+
+  updateTimeEntry(id: string, data: Prisma.TimeEntryUncheckedUpdateInput) {
+    return db.timeEntry.update({ where: { id }, data });
+  },
+
+  deleteTimeEntry(id: string) {
+    return db.timeEntry.delete({ where: { id } });
+  },
+
   // -- Staffing rules -------------------------------------------------------
 
   listStaffingRules(includeInactive = false) {

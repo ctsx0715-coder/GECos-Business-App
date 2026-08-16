@@ -521,6 +521,68 @@ const TURNS: Array<{
 ];
 
 /**
+ * Time actually worked, so the timesheet opens with a week on it.
+ *
+ * Four shapes, because they are the four the screen has to tell apart: an
+ * ordinary day signed off, a long day still waiting for a signature, a night
+ * shift that ends the following morning, and somebody who is on the clock
+ * right now. Hours relative to today, so a demonstration in March is not
+ * looking at an empty week from November.
+ */
+const TIME_ENTRIES: Array<{
+  who: string;
+  startedDaysAgo: number;
+  startsAtHour: number;
+  /** Hours on the clock. Null means they have not clocked out. */
+  hours: number | null;
+  breakMinutes: number;
+  approved: boolean;
+  note?: string;
+}> = [
+  {
+    who: "Jacob Mthembu",
+    startedDaysAgo: 3,
+    startsAtHour: 7,
+    hours: 9,
+    breakMinutes: 60,
+    approved: true,
+  },
+  {
+    who: "Jacob Mthembu",
+    startedDaysAgo: 2,
+    startsAtHour: 7,
+    hours: 9,
+    breakMinutes: 60,
+    approved: true,
+  },
+  {
+    who: "Anele Dlamini",
+    startedDaysAgo: 1,
+    startsAtHour: 7,
+    hours: 11,
+    breakMinutes: 60,
+    approved: false,
+    note: "Concrete pour ran late",
+  },
+  {
+    who: "Pieter van Wyk",
+    startedDaysAgo: 2,
+    startsAtHour: 18,
+    hours: 12,
+    breakMinutes: 60,
+    approved: false,
+  },
+  {
+    who: "Katlego Sebego",
+    startedDaysAgo: 0,
+    startsAtHour: -3,
+    hours: null,
+    breakMinutes: 0,
+    approved: false,
+  },
+];
+
+/**
  * How many people each thing needs.
  *
  * Three shapes on purpose, because one form covers all of them and the point
@@ -586,6 +648,7 @@ export interface HrDemoSummary {
   reportingLines: number;
   leaveApprovalSteps: number;
   staffingRules: number;
+  timeEntries: number;
   leaveTypes: number;
   publicHolidays: number;
   rosterAssignments: number;
@@ -634,6 +697,7 @@ export async function seedHrDemo(params: {
     reportingLines: 0,
     leaveApprovalSteps: 0,
     staffingRules: 0,
+    timeEntries: 0,
     leaveTypes: 0,
     publicHolidays: 0,
     rosterAssignments: 0,
@@ -1042,6 +1106,60 @@ export async function seedHrDemo(params: {
       },
     });
     summary.staffingRules += 1;
+  }
+
+  // ---- Time worked --------------------------------------------------------
+  // The shift is copied from the person's pattern at the moment they clock in,
+  // exactly as the service does it, so the demonstration's variance figures
+  // are computed the same way a real one would be.
+  for (const spec of TIME_ENTRIES) {
+    const employeeId = employeeIds[spec.who];
+    if (!employeeId) continue;
+
+    const clockedInAt = new Date();
+    if (spec.startsAtHour < 0) {
+      // Negative means "this many hours ago", for somebody still on the clock.
+      clockedInAt.setUTCHours(clockedInAt.getUTCHours() + spec.startsAtHour, 0, 0, 0);
+    } else {
+      clockedInAt.setUTCDate(clockedInAt.getUTCDate() - spec.startedDaysAgo);
+      clockedInAt.setUTCHours(spec.startsAtHour, 0, 0, 0);
+    }
+
+    const already = await db.timeEntry.findFirst({
+      where: { employeeId, clockedInAt },
+    });
+    if (already) continue;
+
+    const employee = await db.employee.findUnique({
+      where: { id: employeeId },
+      select: { shiftId: true, workPattern: { select: { shiftId: true } } },
+    });
+
+    await db.timeEntry.create({
+      data: {
+        organisationId,
+        employeeId,
+        workedOn: new Date(
+          Date.UTC(
+            clockedInAt.getUTCFullYear(),
+            clockedInAt.getUTCMonth(),
+            clockedInAt.getUTCDate(),
+          ),
+        ),
+        clockedInAt,
+        clockedOutAt:
+          spec.hours === null
+            ? null
+            : new Date(clockedInAt.getTime() + spec.hours * 3_600_000),
+        breakMinutes: spec.breakMinutes,
+        projectId: site?.id ?? null,
+        shiftId: employee?.shiftId ?? employee?.workPattern?.shiftId ?? null,
+        note: spec.note,
+        approvedAt: spec.approved ? new Date() : null,
+        approvedById: spec.approved ? (userIds.project_manager ?? null) : null,
+      },
+    });
+    summary.timeEntries += 1;
   }
 
   // ---- Leave requests -----------------------------------------------------

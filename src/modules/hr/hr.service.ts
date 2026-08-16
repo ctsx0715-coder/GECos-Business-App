@@ -11,11 +11,15 @@ import { requirePermission, hasPermission } from "@/lib/permissions";
 import {
   addHolidaySchema,
   adjustBalanceSchema,
+  approveTimeEntriesSchema,
   assignPatternsSchema,
   assignToRosterSchema,
   cancelLeaveSchema,
   cancelTurnSchema,
   certificationSchema,
+  clockInSchema,
+  clockOutSchema,
+  correctTimeEntrySchema,
   createEmployeeSchema,
   createLeaveTypeSchema,
   createShiftSchema,
@@ -61,6 +65,16 @@ import {
   shortfall,
   weekVerdict,
 } from "./staffing";
+import {
+  describeMoment,
+  looksUnclosed,
+  minutesSoFar,
+  minutesWorked,
+  overlaps,
+  overtimeAgainst,
+  undertimeAgainst,
+  workingDayOf,
+} from "./timesheets";
 import {
   DEFAULT_PATTERN,
   PATTERN_ANCHOR,
@@ -1199,6 +1213,286 @@ export const hrService = {
         placed: days.filter((day) => day.placement).length,
       },
     };
+  },
+
+  // -- Timesheets -----------------------------------------------------------
+
+  /**
+   * Clocking somebody on.
+   *
+   * Your own needs `hr.timesheet.record`, which everybody has. Anybody else's
+   * needs `hr.timesheet.manage`, because on a site most of the crew have no
+   * login and the foreman clocks them in — and because the alternative to
+   * letting him is a paper book that never reaches payroll.
+   */
+  async clockIn(input: unknown) {
+    const data = clockInSchema.parse(input);
+    await this.assertMayRecordFor(data.employeeId);
+
+    const employee = await hrRepository.findEmployee(data.employeeId);
+    if (!employee) throw new NotFoundError("Employee");
+    if (employee.status === "EXITED") {
+      throw new BusinessRuleError("That employee has left.");
+    }
+
+    const open = await hrRepository.openTimeEntry(data.employeeId);
+    if (open) {
+      throw new BusinessRuleError(
+        `${employee.firstName} is already clocked in, since ${describeMoment(open.clockedInAt)}. Clock out first.`,
+      );
+    }
+
+    const at = data.at ?? new Date();
+    const workedOn = workingDayOf(at);
+
+    /*
+     * The shift and the site are copied from the plan at the moment of
+     * clocking in rather than read back later. A roster that is rewritten next
+     * week must not change what somebody's Tuesday was measured against —
+     * a timesheet is a record of what happened, and its comparison has to be
+     * as fixed as the times are.
+     */
+    const turn = turnInForce(
+      await hrRepository.turnsFor([data.employeeId]),
+      workedOn,
+    );
+    const placement = (
+      await hrRepository.listAssignments(workedOn, workedOn, {
+        employeeId: data.employeeId,
+      })
+    )[0];
+
+    return hrRepository.createTimeEntry({
+      employeeId: data.employeeId,
+      workedOn,
+      clockedInAt: at,
+      projectId: data.projectId ?? placement?.projectId ?? null,
+      shiftId:
+        turn?.shiftId ??
+        turn?.workPattern.shift?.id ??
+        employee.shiftId ??
+        employee.workPattern?.shiftId ??
+        null,
+      note: data.note,
+    });
+  },
+
+  async clockOut(input: unknown) {
+    const data = clockOutSchema.parse(input);
+    await this.assertMayRecordFor(data.employeeId);
+
+    const open = await hrRepository.openTimeEntry(data.employeeId);
+    if (!open) {
+      throw new BusinessRuleError("They are not clocked in.");
+    }
+
+    const at = data.at ?? new Date();
+    if (at <= open.clockedInAt) {
+      throw new BusinessRuleError("They clocked out before they clocked in.");
+    }
+
+    return hrRepository.updateTimeEntry(open.id, {
+      clockedOutAt: at,
+      breakMinutes: data.breakMinutes,
+      note: data.note ?? open.note,
+    });
+  },
+
+  /**
+   * Fixing an entry after the fact.
+   *
+   * An approved entry is not edited. Payroll has been run against it and
+   * rewriting it silently changes a figure somebody has already been paid; the
+   * way to correct one after approval is to unapprove it deliberately, which
+   * leaves both facts in the audit trail.
+   */
+  async correctTimeEntry(input: unknown) {
+    await requirePermission("hr.timesheet.manage");
+    const data = correctTimeEntrySchema.parse(input);
+
+    const entry = await hrRepository.findTimeEntry(data.entryId);
+    if (!entry) throw new NotFoundError("Time entry");
+    if (entry.approvedAt) {
+      throw new BusinessRuleError(
+        "That entry has been signed off. Withdraw the approval before changing it.",
+      );
+    }
+
+    const workedOn = workingDayOf(data.clockedInAt);
+    const sameDay = await hrRepository.timeEntriesOn(entry.employeeId, workedOn);
+    const clash = sameDay.find(
+      (other) =>
+        other.id !== entry.id &&
+        overlaps(other, {
+          clockedInAt: data.clockedInAt,
+          clockedOutAt: data.clockedOutAt ?? null,
+          breakMinutes: data.breakMinutes,
+        }),
+    );
+    if (clash) {
+      throw new BusinessRuleError(
+        "That overlaps another entry on the same day. Nobody is at work twice at once.",
+      );
+    }
+
+    return hrRepository.updateTimeEntry(data.entryId, {
+      workedOn,
+      clockedInAt: data.clockedInAt,
+      clockedOutAt: data.clockedOutAt ?? null,
+      breakMinutes: data.breakMinutes,
+      note: data.reason,
+    });
+  },
+
+  /**
+   * Signing entries off for payroll.
+   *
+   * A separate permission from recording them, because approving what you
+   * yourself typed is how a timesheet becomes a payment nobody checked. The
+   * service refuses an entry that is still running for the plainer reason that
+   * nobody knows yet how long it was.
+   */
+  async approveTimeEntries(input: unknown) {
+    const actorId = await requirePermission("hr.timesheet.approve");
+    const { entryIds } = approveTimeEntriesSchema.parse(input);
+
+    const approved: string[] = [];
+    for (const entryId of entryIds) {
+      const entry = await hrRepository.findTimeEntry(entryId);
+      if (!entry) throw new NotFoundError("Time entry");
+      if (entry.approvedAt) continue;
+      if (!entry.clockedOutAt) {
+        throw new BusinessRuleError(
+          "One of those is still running. It cannot be signed off until it has an end.",
+        );
+      }
+
+      await hrRepository.updateTimeEntry(entryId, {
+        approvedAt: new Date(),
+        approvedById: actorId,
+      });
+      approved.push(entryId);
+    }
+
+    return { approved: approved.length };
+  },
+
+  async withdrawApproval(entryId: string) {
+    await requirePermission("hr.timesheet.approve");
+    const entry = await hrRepository.findTimeEntry(entryId);
+    if (!entry) throw new NotFoundError("Time entry");
+
+    return hrRepository.updateTimeEntry(entryId, {
+      approvedAt: null,
+      approvedById: null,
+    });
+  },
+
+  /** Whoever is on the clock at this moment. */
+  async whoIsOnTheClock() {
+    await requirePermission("hr.timesheet.view");
+    const open = await hrRepository.openTimeEntries();
+
+    return open.map((entry) => ({
+      id: entry.id,
+      employeeId: entry.employeeId,
+      name: `${entry.employee.firstName} ${entry.employee.lastName}`,
+      since: entry.clockedInAt,
+      minutesSoFar: minutesSoFar(entry),
+      projectName: entry.project?.name ?? null,
+      shiftName: entry.shift?.name ?? null,
+      /** Running longer than anybody works: probably nobody clocked out. */
+      looksForgotten: looksUnclosed(entry),
+    }));
+  },
+
+  /** One person's own open entry, for the clock on their own screen. */
+  async myOpenEntry() {
+    const mine = await this.myEmployeeId();
+    if (!mine) return null;
+
+    const open = await hrRepository.openTimeEntry(mine);
+    if (!open) return { employeeId: mine, entry: null };
+
+    return {
+      employeeId: mine,
+      entry: {
+        id: open.id,
+        since: open.clockedInAt,
+        minutesSoFar: minutesSoFar(open),
+        projectName: open.project?.name ?? null,
+        shiftName: open.shift?.name ?? null,
+      },
+    };
+  },
+
+  /**
+   * A week of somebody's card, or of everybody's.
+   *
+   * The variance against the shift is computed here rather than stored,
+   * because a stored total is one more figure that can disagree with the times
+   * beside it — and the times are what a dispute is actually about.
+   */
+  async timesheetFor(from: Date, to: Date, filter?: { employeeId?: string }) {
+    if (filter?.employeeId) {
+      await this.assertMaySeeEmployee(filter.employeeId);
+    } else {
+      await requirePermission("hr.timesheet.view");
+    }
+
+    const entries = await hrRepository.listTimeEntries(
+      startOfUtcDay(from),
+      startOfUtcDay(to),
+      filter,
+    );
+
+    const rows = entries.map((entry) => ({
+      id: entry.id,
+      employeeId: entry.employeeId,
+      name: `${entry.employee.firstName} ${entry.employee.lastName}`,
+      workedOn: entry.workedOn,
+      clockedInAt: entry.clockedInAt,
+      clockedOutAt: entry.clockedOutAt,
+      breakMinutes: entry.breakMinutes,
+      minutes: minutesWorked(entry),
+      projectName: entry.project?.name ?? null,
+      shiftName: entry.shift?.name ?? null,
+      overtime: overtimeAgainst(entry, entry.shift),
+      undertime: entry.clockedOutAt ? undertimeAgainst(entry, entry.shift) : 0,
+      approvedAt: entry.approvedAt,
+      approvedBy: entry.approvedBy
+        ? `${entry.approvedBy.firstName} ${entry.approvedBy.lastName}`
+        : null,
+      running: entry.clockedOutAt === null,
+      looksForgotten: looksUnclosed(entry),
+      note: entry.note,
+    }));
+
+    return {
+      rows,
+      totals: {
+        minutes: rows.reduce((sum, row) => sum + row.minutes, 0),
+        overtime: rows.reduce((sum, row) => sum + row.overtime, 0),
+        awaiting: rows.filter((row) => !row.approvedAt && !row.running).length,
+        running: rows.filter((row) => row.running).length,
+      },
+    };
+  },
+
+  /**
+   * Whether the signed-in person may clock this employee.
+   *
+   * Yourself always; anybody else only with `hr.timesheet.manage`. Kept beside
+   * the other self-service check rather than inside each method, because the
+   * rule is the same one in three places and a copy is where it drifts.
+   */
+  async assertMayRecordFor(employeeId: string) {
+    const mine = await this.myEmployeeId();
+    if (mine && mine === employeeId) {
+      await requirePermission("hr.timesheet.record");
+      return;
+    }
+    await requirePermission("hr.timesheet.manage");
   },
 
   // -- Staffing and coverage ------------------------------------------------

@@ -416,3 +416,62 @@ export async function removeStaffingRuleAction(
   revalidatePath("/hr/coverage");
   return result;
 }
+
+export async function clockInAction(
+  input: Record<string, unknown>,
+): Promise<ActionResult> {
+  const result = await run(() =>
+    withSession(async () => {
+      await hrService.clockIn(input);
+    }),
+  );
+  revalidatePath("/hr/timesheets");
+  return result;
+}
+
+export async function clockOutAction(
+  input: Record<string, unknown>,
+): Promise<ActionResult> {
+  const result = await run(() =>
+    withSession(async () => {
+      await hrService.clockOut(input);
+    }),
+  );
+  revalidatePath("/hr/timesheets");
+  return result;
+}
+
+export async function correctTimeEntryAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.correctTimeEntry(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath("/hr/timesheets");
+  return result;
+}
+
+export async function approveTimeEntriesAction(
+  entryIds: string[],
+): Promise<ActionResult> {
+  const result = await run(() =>
+    withSession(async () => {
+      await hrService.approveTimeEntries({ entryIds });
+    }),
+  );
+  revalidatePath("/hr/timesheets");
+  return result;
+}
+
+export async function withdrawTimeApprovalAction(
+  entryId: string,
+): Promise<ActionResult> {
+  const result = await run(() =>
+    withSession(async () => {
+      await hrService.withdrawApproval(entryId);
+    }),
+  );
+  revalidatePath("/hr/timesheets");
+  return result;
+}

@@ -163,6 +163,16 @@ const NAV: NavItem[] = [
     group: "cycles",
   },
   {
+    href: "/hr/timesheets",
+    label: "Timesheets",
+    icon: "clock",
+    moduleKey: "hr",
+    // No permission: everybody can clock themselves in, and the screen shows
+    // a person with nothing more than that only their own week.
+    group: "cycles",
+    needsEmployeeRecord: true,
+  },
+  {
     href: "/hr/coverage",
     label: "Coverage",
     icon: "alert",

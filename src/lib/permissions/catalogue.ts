@@ -112,6 +112,18 @@ export const PERMISSIONS = {
   "hr.roster.view": MODULES.HR,
   "hr.roster.manage": MODULES.HR,
 
+  /*
+   * Time is four verbs rather than two, because they are held by different
+   * people. Clocking yourself in is baseline; clocking somebody else in is a
+   * supervisor's job; reading everybody's card is HR's; and signing a week off
+   * for payroll is the one that costs money, so it is not the same permission
+   * as recording it.
+   */
+  "hr.timesheet.view": MODULES.HR,
+  "hr.timesheet.record": MODULES.HR,
+  "hr.timesheet.manage": MODULES.HR,
+  "hr.timesheet.approve": MODULES.HR,
+
   // Documents
   "documents.document.view": MODULES.DOCUMENTS,
   "documents.document.upload": MODULES.DOCUMENTS,
@@ -230,6 +242,11 @@ export const SYSTEM_ROLES: Record<
       // with people in a week.
       "hr.roster.view",
       "hr.roster.manage",
+      // Clocks the crew in when somebody forgets, and signs the week off.
+      "hr.timesheet.view",
+      "hr.timesheet.record",
+      "hr.timesheet.manage",
+      "hr.timesheet.approve",
     ],
   },
   /**
@@ -253,6 +270,10 @@ export const SYSTEM_ROLES: Record<
       "hr.leave.configure",
       "hr.roster.view",
       "hr.roster.manage",
+      "hr.timesheet.view",
+      "hr.timesheet.record",
+      "hr.timesheet.manage",
+      "hr.timesheet.approve",
       "core.users.view",
       "core.workflow.view",
       "documents.document.view",
@@ -272,6 +293,9 @@ export const SYSTEM_ROLES: Record<
       "hr.leave.request",
       // Where the crew is this week is not a secret from the crew.
       "hr.roster.view",
+      // Clocking yourself in and out. Reading anybody else's card is not
+      // baseline, and neither is approving your own.
+      "hr.timesheet.record",
     ],
   },
 };

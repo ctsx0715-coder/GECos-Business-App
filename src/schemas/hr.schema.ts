@@ -349,6 +349,57 @@ export const removeStaffingRuleSchema = z.object({
   ruleId: z.uuid(),
 });
 
+/**
+ * Clocking on and off.
+ *
+ * The employee is explicit rather than implied by the session, because a
+ * foreman clocking in a crew of eighteen is the ordinary case on a site where
+ * most people have no login at all. Who is allowed to name somebody other than
+ * themselves is a permission, checked in the service.
+ */
+export const clockInSchema = z.object({
+  employeeId: z.uuid(),
+  /** Defaults to now. Supplied when a supervisor records it after the fact. */
+  at: z.coerce.date().optional(),
+  projectId: z.uuid().nullable().optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+export const clockOutSchema = z.object({
+  employeeId: z.uuid(),
+  at: z.coerce.date().optional(),
+  /** Unpaid break to subtract, in minutes. */
+  breakMinutes: z.number().int().min(0).max(480).default(0),
+  note: z.string().trim().max(500).optional(),
+});
+
+/**
+ * Correcting an entry after the fact.
+ *
+ * Both moments together, because a correction is a statement about the whole
+ * stretch — changing only the end of a night shift that was typed with the
+ * wrong start produces a number nobody can explain.
+ */
+export const correctTimeEntrySchema = z
+  .object({
+    entryId: z.uuid(),
+    clockedInAt: z.coerce.date(),
+    clockedOutAt: z.coerce.date().nullable().optional(),
+    breakMinutes: z.number().int().min(0).max(480).default(0),
+    reason: z.string().trim().min(3, "Say what was wrong with it."),
+  })
+  .refine(
+    (data) => !data.clockedOutAt || data.clockedOutAt > data.clockedInAt,
+    {
+      message: "They clocked out before they clocked in.",
+      path: ["clockedOutAt"],
+    },
+  );
+
+export const approveTimeEntriesSchema = z.object({
+  entryIds: z.array(z.uuid()).min(1, "Choose at least one entry."),
+});
+
 export const addHolidaySchema = z.object({
   observedOn: z.coerce.date(),
   name: z.string().trim().min(2, "Name the day."),

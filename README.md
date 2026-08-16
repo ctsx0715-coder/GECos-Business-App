@@ -30,7 +30,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 484 tests against a real database
+pnpm test                   # 528 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -224,6 +224,50 @@ to filling.
 Two clashes are refused — being in two places at once, and being placed across
 approved leave. Leave that is only requested is shown rather than refused,
 because the roster is often what decides whether that request gets approved.
+
+### Timesheets
+
+Everything else in Work cycles is a plan: the pattern says which days, the
+shift says which hours, the roster says where. **Work cycles → Timesheets** is
+the only record of what actually happened, and it is a separate table for
+exactly that reason — reconciling the two is the point, and a plan that
+overwrites itself with reality can no longer be compared to it.
+
+Time is stored as the two moments, never as a number of hours. "When did you
+leave" is the question in dispute when a payslip is queried, and a total cannot
+answer it; the total is derived on every read, so there is no second figure to
+disagree with the times beside it.
+
+A night shift belongs to the day it **started**. Clocking in at 18:00 on
+Tuesday and out at 06:00 on Wednesday is Tuesday's work, and paying it against
+Wednesday puts half a construction payroll in the wrong week.
+
+The shift and the site are copied onto the entry at the moment of clocking in
+rather than read back later, so rewriting next week's roster cannot change what
+somebody's Tuesday was measured against. The variance — over or under the shift
+that was planned — falls out of that comparison. A pattern with no shift has no
+expected length, so nothing is claimed about it rather than eight hours being
+invented.
+
+Four permissions, because four different people hold them:
+
+| Permission | Who |
+|---|---|
+| `hr.timesheet.record` | Everybody, for themselves |
+| `hr.timesheet.manage` | Clocks anybody in, and corrects entries — a site clerk does this for a crew with no logins |
+| `hr.timesheet.view` | Reads the whole company's week |
+| `hr.timesheet.approve` | Signs it off for payroll |
+
+Approving is deliberately not the same permission as recording: signing off
+what you yourself typed is how a timesheet becomes a payment nobody checked.
+An entry that is still running cannot be signed — nobody knows yet how long it
+was — and an entry that *has* been signed is not edited, because payroll has
+been run against it. Withdrawing the approval first is a deliberate act and
+leaves both facts in the audit trail.
+
+An entry left running longer than anybody works is flagged rather than
+truncated. The system does not know what happened, and quietly rewriting
+somebody's hours to a number that suits it is worse than asking.
 
 ### Coverage
 

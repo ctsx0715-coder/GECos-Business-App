@@ -309,6 +309,7 @@ model Organisation {
   rosterAssignments  RosterAssignment[]
   patternAssignments PatternAssignment[]
   staffingRules      StaffingRule[]
+  timeEntries        TimeEntry[]
 
   @@map("organisations")
 }
@@ -357,26 +358,27 @@ model User {
   manager      User?        @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
   reports      User[]       @relation("UserManager")
 
-  roles              UserRole[]
-  ownedTenders       Tender[]           @relation("TenderOwner")
-  uploadedVersions   DocumentVersion[]
-  startedWorkflows   WorkflowInstance[] @relation("WorkflowStartedBy")
-  assignedApprovals  WorkflowApproval[] @relation("ApprovalAssignee")
-  decidedApprovals   WorkflowApproval[] @relation("ApprovalDecider")
-  stepApproverFor    WorkflowStep[]     @relation("StepApproverUser")
-  stepEscalationFor  WorkflowStep[]     @relation("StepEscalationUser")
-  notifications      Notification[]
-  auditLogs          AuditLog[]
-  ownedLeads         Lead[]             @relation("LeadOwner")
-  ownedOpportunities Opportunity[]      @relation("OpportunityOwner")
-  activities         Activity[]         @relation("ActivityOwner")
-  managedProjects    Project[]          @relation("ProjectManager")
-  projectMemberships ProjectMember[]
-  assignedTasks      ProjectTask[]      @relation("TaskAssignee")
-  submittedExpenses  ProjectExpense[]   @relation("ExpenseSubmitter")
-  approvedExpenses   ProjectExpense[]   @relation("ExpenseApprover")
-  employeeRecord     Employee?
-  decidedLeave       LeaveRequest[]     @relation("LeaveDecider")
+  roles               UserRole[]
+  ownedTenders        Tender[]           @relation("TenderOwner")
+  uploadedVersions    DocumentVersion[]
+  startedWorkflows    WorkflowInstance[] @relation("WorkflowStartedBy")
+  assignedApprovals   WorkflowApproval[] @relation("ApprovalAssignee")
+  decidedApprovals    WorkflowApproval[] @relation("ApprovalDecider")
+  approvedTimeEntries TimeEntry[]        @relation("TimeEntryApprover")
+  stepApproverFor     WorkflowStep[]     @relation("StepApproverUser")
+  stepEscalationFor   WorkflowStep[]     @relation("StepEscalationUser")
+  notifications       Notification[]
+  auditLogs           AuditLog[]
+  ownedLeads          Lead[]             @relation("LeadOwner")
+  ownedOpportunities  Opportunity[]      @relation("OpportunityOwner")
+  activities          Activity[]         @relation("ActivityOwner")
+  managedProjects     Project[]          @relation("ProjectManager")
+  projectMemberships  ProjectMember[]
+  assignedTasks       ProjectTask[]      @relation("TaskAssignee")
+  submittedExpenses   ProjectExpense[]   @relation("ExpenseSubmitter")
+  approvedExpenses    ProjectExpense[]   @relation("ExpenseApprover")
+  employeeRecord      Employee?
+  decidedLeave        LeaveRequest[]     @relation("LeaveDecider")
 
   @@unique([organisationId, email])
   @@index([organisationId])
@@ -803,6 +805,7 @@ model Project {
   expenses          ProjectExpense[]
   rosterAssignments RosterAssignment[]
   staffingRules     StaffingRule[]
+  timeEntries       TimeEntry[]
 
   @@unique([organisationId, reference])
   @@index([organisationId])
@@ -1302,6 +1305,7 @@ model Employee {
   leaveRequests      LeaveRequest[]
   rosterAssignments  RosterAssignment[]
   patternAssignments PatternAssignment[]
+  timeEntries        TimeEntry[]
 
   @@unique([organisationId, employeeNumber])
   @@unique([userId])
@@ -1452,6 +1456,7 @@ model Shift {
   employees     Employee[]
   assignments   PatternAssignment[]
   staffingRules StaffingRule[]
+  timeEntries   TimeEntry[]
 
   @@unique([organisationId, code])
   @@index([organisationId])
@@ -1623,6 +1628,69 @@ model RosterAssignment {
   @@index([organisationId, startsAt])
   @@index([employeeId, startsAt])
   @@map("roster_assignments")
+}
+
+/// One stretch of time somebody was actually at work.
+///
+/// Everything else in Work cycles is a plan: the pattern says which days
+/// somebody should work, the shift says which hours, the roster says where.
+/// This is the only record of what happened, and it is a separate table for
+/// exactly that reason — reconciling the two is the point, and a plan that
+/// overwrites itself with reality can no longer be compared to it.
+///
+/// Stored as two moments rather than a duration, because "when did you leave"
+/// is the question in dispute when a payslip is queried, and a number of hours
+/// cannot answer it. The minutes worked are derived, never stored: a stored
+/// total is one more thing that can disagree with the times beside it.
+model TimeEntry {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  employeeId     String @db.Uuid
+
+  /// The working day this belongs to, at UTC midnight.
+  ///
+  /// A night shift starting at 18:00 on Tuesday and ending at 06:00 on
+  /// Wednesday is Tuesdays work, and paying it against Wednesday would put
+  /// half a construction payroll on the wrong week. Derived from the moment
+  /// they clocked in, and stored so a day can be looked up without arithmetic.
+  workedOn DateTime @db.Timestamptz(6)
+
+  clockedInAt  DateTime  @db.Timestamptz(6)
+  /// Null while somebody is still on the clock.
+  clockedOutAt DateTime? @db.Timestamptz(6)
+  /// Unpaid break, subtracted from the time between the two moments.
+  breakMinutes Int       @default(0)
+
+  /// Where they were, when it is known. Taken from the roster at clock-in.
+  projectId String? @db.Uuid
+  /// The shift they were on, for comparing what was worked to what was planned.
+  shiftId   String? @db.Uuid
+
+  note String?
+
+  /// Signed off for payroll. Nothing is paid from an unapproved entry, and an
+  /// approved one is not edited — a correction after that is a new entry with
+  /// a reason on it, so the trail survives the disagreement.
+  approvedAt   DateTime? @db.Timestamptz(6)
+  approvedById String?   @db.Uuid
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  shift        Shift?       @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  approvedBy   User?        @relation("TimeEntryApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@index([organisationId, workedOn])
+  @@index([employeeId, workedOn])
+  @@map("time_entries")
 }
 
 /// How many people a site, a trade or the company needs on a given day.
