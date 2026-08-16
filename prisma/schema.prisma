@@ -308,6 +308,7 @@ model Organisation {
   leaveRequests      LeaveRequest[]
   rosterAssignments  RosterAssignment[]
   patternAssignments PatternAssignment[]
+  staffingRules      StaffingRule[]
 
   @@map("organisations")
 }
@@ -801,6 +802,7 @@ model Project {
   milestones        ProjectMilestone[]
   expenses          ProjectExpense[]
   rosterAssignments RosterAssignment[]
+  staffingRules     StaffingRule[]
 
   @@unique([organisationId, reference])
   @@index([organisationId])
@@ -1445,10 +1447,11 @@ model Shift {
   updatedBy    String?      @db.Uuid
   deletedAt    DateTime?    @db.Timestamptz(6)
 
-  organisation Organisation        @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  patterns     WorkPattern[]
-  employees    Employee[]
-  assignments  PatternAssignment[]
+  organisation  Organisation        @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  patterns      WorkPattern[]
+  employees     Employee[]
+  assignments   PatternAssignment[]
+  staffingRules StaffingRule[]
 
   @@unique([organisationId, code])
   @@index([organisationId])
@@ -1620,6 +1623,60 @@ model RosterAssignment {
   @@index([organisationId, startsAt])
   @@index([employeeId, startsAt])
   @@map("roster_assignments")
+}
+
+/// How many people a site, a trade or the company needs on a given day.
+///
+/// "Are we short on Tuesday" is a question nobody could ask this system: it
+/// knew who was rostered and who was on leave, and had no idea how many were
+/// supposed to be there. The number is a row rather than a constant because it
+/// is a judgement that changes weekly — a concrete pour needs eight, the same
+/// site needs three the week after — and because the person who knows it is a
+/// site manager rather than whoever deploys.
+///
+/// Deliberately not a shift-by-shift schedule. That is a different and much
+/// larger thing (every day of every week planned individually), and most of
+/// what it buys is already here: the pattern says who is due in, the roster
+/// says where, and this says how many are wanted. If somebody later needs the
+/// full schedule, these rules are the floor it would be built on.
+model StaffingRule {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  name           String
+
+  /// The site it is about. Null is a rule about the whole company.
+  projectId  String? @db.Uuid
+  /// The trade or department it counts. Null counts everybody.
+  department String?
+  /// The shift it counts. Null counts whoever is due in, whatever the hours.
+  shiftId    String? @db.Uuid
+
+  /// Days the rule applies to, 0 = Monday. Empty means every day — the
+  /// working pattern already decides which of those anybody is due in on, so
+  /// a rule does not have to repeat it.
+  weekdays Int[]
+
+  /// Below this, the day is short.
+  minimumPeople Int
+  /// Above this, the day is overstaffed. Null means no ceiling, which is the
+  /// honest answer for most sites: too many hands is a cost, not a failure.
+  maximumPeople Int?
+
+  isActive Boolean @default(true)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  shift        Shift?       @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@map("staffing_rules")
 }
 
 /// A day the company does not work, and therefore does not charge to leave.

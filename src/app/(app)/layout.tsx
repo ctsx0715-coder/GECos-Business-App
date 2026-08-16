@@ -163,6 +163,14 @@ const NAV: NavItem[] = [
     group: "cycles",
   },
   {
+    href: "/hr/coverage",
+    label: "Coverage",
+    icon: "alert",
+    moduleKey: "hr",
+    permission: "hr.roster.view",
+    group: "cycles",
+  },
+  {
     href: "/hr/month",
     label: "Month view",
     icon: "calendar",

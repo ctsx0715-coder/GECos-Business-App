@@ -30,7 +30,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 451 tests against a real database
+pnpm test                   # 484 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -224,6 +224,44 @@ to filling.
 Two clashes are refused — being in two places at once, and being placed across
 approved leave. Leave that is only requested is shown rather than refused,
 because the roster is often what decides whether that request gets approved.
+
+### Coverage
+
+The roster says who is placed and the leave register says who is away. Neither
+knew how many people were *supposed* to be there, so the one question worth
+asking on a Friday afternoon — are we short next week — could not be asked at
+all. **Work cycles → Coverage** supplies the missing number and does the
+subtraction.
+
+A staffing rule says how many people a thing needs, and every narrowing on it
+is optional: a site, a department, a shift, particular weekdays. That one shape
+covers "the whole company needs somebody on a Sunday", "the workshop needs a
+boilermaker Monday to Friday" and "the water works needs three to five on the
+day shift, six days a week". It is a row rather than a constant because the
+number is a judgement that changes weekly, and the person who knows it is a
+site manager rather than whoever deploys.
+
+Somebody counts towards a rule on a day when their pattern has them working
+it, the company is not closed, their leave has not been approved, and the
+narrowing matches. Leave that is only *requested* does not remove them — it has
+not been granted — but the cell says what approving it would cost, which is
+exactly what the person holding the request needs to know.
+
+Short and over are not shown alike. Being short means work does not happen;
+being over means it cost more than it needed to. A rule with no ceiling can
+never be overstaffed, because too many hands is a cost rather than a failure.
+A week is judged by its worst day rather than by an average — five comfortable
+days do not staff the Wednesday nobody turned up for.
+
+A public holiday reads as **closed**, not short. Nobody is due in, so every
+rule would show zero against its minimum and the week would be a wall of red
+for a day that went exactly as intended. A site that must be manned through a
+holiday is a different arrangement, and this model does not express it yet.
+
+Deliberately not a shift-by-shift schedule — every day of every week planned
+individually is a much larger thing, and most of what it buys is already here:
+the pattern says who is due in, the roster says where, and a rule says how many
+are wanted.
 
 ### Public holidays
 

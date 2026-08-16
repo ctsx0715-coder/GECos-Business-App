@@ -521,6 +521,46 @@ const TURNS: Array<{
 ];
 
 /**
+ * How many people each thing needs.
+ *
+ * Three shapes on purpose, because one form covers all of them and the point
+ * of the screen is lost if every rule looks alike: a site with a floor and a
+ * ceiling, a trade with neither, and a shift that needs one person on it every
+ * single day including Sunday.
+ */
+const STAFFING_RULES: Array<{
+  name: string;
+  onSite: boolean;
+  department?: string;
+  shift?: string;
+  weekdays: number[];
+  minimumPeople: number;
+  maximumPeople?: number;
+}> = [
+  {
+    name: "Site crew — day shift",
+    onSite: true,
+    weekdays: [0, 1, 2, 3, 4, 5],
+    minimumPeople: 3,
+    maximumPeople: 5,
+  },
+  {
+    name: "Workshop",
+    onSite: false,
+    department: "Workshop",
+    weekdays: [0, 1, 2, 3, 4],
+    minimumPeople: 1,
+  },
+  {
+    name: "Plant on nights",
+    onSite: false,
+    shift: "NIGHT",
+    weekdays: [],
+    minimumPeople: 1,
+  },
+];
+
+/**
  * A week of placements, so the roster opens with something on it.
  *
  * Relative to today rather than fixed dates, because a demonstration in
@@ -545,6 +585,7 @@ export interface HrDemoSummary {
   patternTurns: number;
   reportingLines: number;
   leaveApprovalSteps: number;
+  staffingRules: number;
   leaveTypes: number;
   publicHolidays: number;
   rosterAssignments: number;
@@ -592,6 +633,7 @@ export async function seedHrDemo(params: {
     patternTurns: 0,
     reportingLines: 0,
     leaveApprovalSteps: 0,
+    staffingRules: 0,
     leaveTypes: 0,
     publicHolidays: 0,
     rosterAssignments: 0,
@@ -977,6 +1019,29 @@ export async function seedHrDemo(params: {
       },
     });
     summary.rosterAssignments += 1;
+  }
+
+  // ---- Staffing rules -----------------------------------------------------
+  // What each thing needs, so the coverage screen has something to measure
+  // against. Without a rule the screen is honest but empty: nothing can be
+  // short of a number nobody has written down.
+  for (const spec of STAFFING_RULES) {
+    const already = await db.staffingRule.findFirst({ where: { name: spec.name } });
+    if (already) continue;
+
+    await db.staffingRule.create({
+      data: {
+        organisationId,
+        name: spec.name,
+        projectId: spec.onSite ? (site?.id ?? null) : null,
+        department: spec.department ?? null,
+        shiftId: spec.shift ? (shiftIds[spec.shift] ?? null) : null,
+        weekdays: spec.weekdays,
+        minimumPeople: spec.minimumPeople,
+        maximumPeople: spec.maximumPeople ?? null,
+      },
+    });
+    summary.staffingRules += 1;
   }
 
   // ---- Leave requests -----------------------------------------------------

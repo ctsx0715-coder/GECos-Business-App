@@ -382,3 +382,37 @@ export async function applyDueTurnsAction(): Promise<ActionResult> {
   revalidatePath("/hr/roster");
   return result;
 }
+
+export async function createStaffingRuleAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.createStaffingRule(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath("/hr/coverage");
+  return result;
+}
+
+export async function updateStaffingRuleAction(
+  input: Record<string, unknown>,
+): Promise<FormResult> {
+  const result = await runFormAction(
+    () => withSession(() => hrService.updateStaffingRule(input)),
+    () => ({ ok: true }),
+  );
+  revalidatePath("/hr/coverage");
+  return result;
+}
+
+export async function removeStaffingRuleAction(
+  ruleId: string,
+): Promise<ActionResult> {
+  const result = await run(() =>
+    withSession(async () => {
+      await hrService.removeStaffingRule({ ruleId });
+    }),
+  );
+  revalidatePath("/hr/coverage");
+  return result;
+}

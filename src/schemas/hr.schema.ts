@@ -294,6 +294,61 @@ export const cancelTurnSchema = z.object({
   assignmentId: z.uuid(),
 });
 
+/**
+ * How many people a site or a trade needs.
+ *
+ * Every narrowing field is optional and null means "do not narrow by this",
+ * which is what makes one shape cover both "the whole company needs somebody
+ * on a Sunday" and "the water works needs four boilermakers on nights".
+ */
+const staffingRuleFields = {
+  name: z.string().trim().min(2, "Name the rule."),
+  /** Null is a rule about the whole company. */
+  projectId: z.uuid().nullable().optional(),
+  /** Null counts every department. */
+  department: z.string().trim().max(120).nullable().optional(),
+  /** Null counts whoever is due in, whatever hours they work. */
+  shiftId: z.uuid().nullable().optional(),
+  /** 0 = Monday. Empty means every day. */
+  weekdays: z.array(z.number().int().min(0).max(6)).default([]),
+  minimumPeople: z.number().int().min(0).max(500),
+  maximumPeople: z.number().int().min(0).max(500).nullable().optional(),
+};
+
+export const createStaffingRuleSchema = z
+  .object(staffingRuleFields)
+  .refine(
+    (data) =>
+      data.maximumPeople === null ||
+      data.maximumPeople === undefined ||
+      data.maximumPeople >= data.minimumPeople,
+    {
+      message: "The most is fewer than the fewest.",
+      path: ["maximumPeople"],
+    },
+  );
+
+export const updateStaffingRuleSchema = z
+  .object({
+    ruleId: z.uuid(),
+    ...staffingRuleFields,
+    isActive: z.boolean().default(true),
+  })
+  .refine(
+    (data) =>
+      data.maximumPeople === null ||
+      data.maximumPeople === undefined ||
+      data.maximumPeople >= data.minimumPeople,
+    {
+      message: "The most is fewer than the fewest.",
+      path: ["maximumPeople"],
+    },
+  );
+
+export const removeStaffingRuleSchema = z.object({
+  ruleId: z.uuid(),
+});
+
 export const addHolidaySchema = z.object({
   observedOn: z.coerce.date(),
   name: z.string().trim().min(2, "Name the day."),

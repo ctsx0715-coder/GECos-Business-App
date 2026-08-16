@@ -19,6 +19,7 @@ import {
   createEmployeeSchema,
   createLeaveTypeSchema,
   createShiftSchema,
+  createStaffingRuleSchema,
   createWorkPatternSchema,
   decideLeaveSchema,
   exitEmployeeSchema,
@@ -26,11 +27,13 @@ import {
   removeAssignmentSchema,
   removeCertificationSchema,
   removeHolidaySchema,
+  removeStaffingRuleSchema,
   requestLeaveSchema,
   setBalanceSchema,
   updateEmployeeSchema,
   updateLeaveTypeSchema,
   updateShiftSchema,
+  updateStaffingRuleSchema,
   updateWorkPatternSchema,
 } from "@/schemas/hr.schema";
 import type { EmployeeStatus, LeaveRequestStatus } from "@/generated/prisma/client";
@@ -51,6 +54,13 @@ import {
   turnInForce,
 } from "./rotation";
 import { describeShift, spanMinutes, workedHours } from "./shifts";
+import {
+  assess,
+  describeRule,
+  ruleAppliesOn,
+  shortfall,
+  weekVerdict,
+} from "./staffing";
 import {
   DEFAULT_PATTERN,
   PATTERN_ANCHOR,
@@ -1187,6 +1197,245 @@ export const hrService = {
         onLeave: days.filter((day) => day.leave).length,
         holidays: days.filter((day) => day.holiday).length,
         placed: days.filter((day) => day.placement).length,
+      },
+    };
+  },
+
+  // -- Staffing and coverage ------------------------------------------------
+
+  async listStaffingRules(includeInactive = false) {
+    await requirePermission("hr.roster.view");
+    return hrRepository.listStaffingRules(includeInactive);
+  },
+
+  async createStaffingRule(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const data = createStaffingRuleSchema.parse(input);
+
+    return hrRepository.createStaffingRule({
+      name: data.name,
+      projectId: data.projectId ?? null,
+      department: data.department || null,
+      shiftId: data.shiftId ?? null,
+      weekdays: unique(data.weekdays),
+      minimumPeople: data.minimumPeople,
+      maximumPeople: data.maximumPeople ?? null,
+    });
+  },
+
+  async updateStaffingRule(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const { ruleId, ...changes } = updateStaffingRuleSchema.parse(input);
+
+    const rule = await hrRepository.findStaffingRule(ruleId);
+    if (!rule) throw new NotFoundError("Staffing rule");
+
+    return hrRepository.updateStaffingRule(ruleId, {
+      ...changes,
+      projectId: changes.projectId ?? null,
+      department: changes.department || null,
+      shiftId: changes.shiftId ?? null,
+      weekdays: unique(changes.weekdays),
+      maximumPeople: changes.maximumPeople ?? null,
+    });
+  },
+
+  async removeStaffingRule(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const { ruleId } = removeStaffingRuleSchema.parse(input);
+
+    const rule = await hrRepository.findStaffingRule(ruleId);
+    if (!rule) throw new NotFoundError("Staffing rule");
+
+    await hrRepository.deleteStaffingRule(ruleId);
+    return { ruleId };
+  },
+
+  /**
+   * Whether each rule is being met, day by day across a window.
+   *
+   * Everything needed is fetched once and the comparison is done in memory:
+   * a query per rule per day would be forty round trips to answer one screen,
+   * and the numbers all come from the same four facts — who is due in, who is
+   * away, where they are placed, and what hours they work.
+   *
+   * Somebody counts towards a rule on a day when their pattern says they are
+   * working it, the company is not closed, their leave has not been approved,
+   * and the narrowing the rule asks for — a site, a department, a shift —
+   * matches. Leave that is only *requested* does not remove them, because it
+   * has not been granted; it is reported separately, since "we are fine unless
+   * you approve that" is exactly what the person approving it needs to know.
+   */
+  async coverageFor(from: Date, to: Date) {
+    await requirePermission("hr.roster.view");
+
+    const rules = await hrRepository.listStaffingRules();
+    const employees = await hrRepository.listEmployees(["ACTIVE", "ON_LEAVE"]);
+
+    const [holidays, turns, placements, leave, fallback] = await Promise.all([
+      this.holidayDatesBetween(from, to),
+      employees.length
+        ? hrRepository.turnsFor(employees.map((row) => row.id))
+        : Promise.resolve([]),
+      hrRepository.listAssignments(from, to),
+      hrRepository.listLeaveRequests({ status: ["APPROVED", "SUBMITTED"] }),
+      hrRepository.findDefaultWorkPattern(),
+    ]);
+
+    const days: string[] = [];
+    for (
+      const cursor = startOfUtcDay(from);
+      cursor <= startOfUtcDay(to);
+      cursor.setUTCDate(cursor.getUTCDate() + 1)
+    ) {
+      days.push(isoDate(cursor));
+    }
+
+    /** Who is available on each day, with what the rules narrow by. */
+    const availability = days.map((iso) => {
+      const on = new Date(`${iso}T00:00:00.000Z`);
+
+      return employees
+        .map((employee) => {
+          const turn = turnInForce(
+            turns.filter((row) => row.employeeId === employee.id),
+            on,
+          );
+          const pattern = turn
+            ? {
+                cycleDays: turn.workPattern.cycleDays,
+                workingDayIndexes: turn.workPattern.workingDayIndexes,
+                anchorOn: turn.workPattern.anchorOn,
+              }
+            : employee.workPattern
+              ? {
+                  cycleDays: employee.workPattern.cycleDays,
+                  workingDayIndexes: employee.workPattern.workingDayIndexes,
+                  anchorOn: employee.workPattern.anchorOn,
+                }
+              : fallback
+                ? {
+                    cycleDays: fallback.cycleDays,
+                    workingDayIndexes: fallback.workingDayIndexes,
+                    anchorOn: fallback.anchorOn,
+                  }
+                : DEFAULT_PATTERN;
+
+          const due = worksOn(pattern, on) && !holidays.has(iso);
+          const theirLeave = leave.find(
+            (request) =>
+              request.employeeId === employee.id &&
+              request.startsAt <= on &&
+              request.endsAt >= on,
+          );
+
+          return {
+            id: employee.id,
+            department: employee.department,
+            due,
+            away: theirLeave?.status === "APPROVED",
+            mightBeAway: theirLeave?.status === "SUBMITTED",
+            shiftId:
+              turn?.shiftId ??
+              turn?.workPattern.shift?.id ??
+              employee.shiftId ??
+              employee.workPattern?.shiftId ??
+              null,
+            projectIds: placements
+              .filter(
+                (row) =>
+                  row.employeeId === employee.id &&
+                  row.startsAt <= on &&
+                  row.endsAt >= on,
+              )
+              .map((row) => row.projectId),
+          };
+        })
+        .filter((person) => person.due);
+    });
+
+    const assessed = rules.map((rule) => {
+      const shape = {
+        minimumPeople: rule.minimumPeople,
+        maximumPeople: rule.maximumPeople,
+        weekdays: rule.weekdays,
+      };
+
+      const cells = days.map((iso, index) => {
+        const on = new Date(`${iso}T00:00:00.000Z`);
+
+        /*
+         * A day the company is closed is not a day it is short.
+         *
+         * Nobody is due in on a public holiday, so every rule would read zero
+         * against its minimum and the week would show a wall of red for a day
+         * that went exactly as intended. A holiday is reported as closed and
+         * left out of the verdict — the same treatment as a day the rule was
+         * never about. A site that genuinely must be manned through a holiday
+         * is a different arrangement, and this model cannot express it yet.
+         */
+        const closed = holidays.has(iso);
+        if (closed || !ruleAppliesOn(shape, on)) {
+          return {
+            date: iso,
+            applies: false,
+            closed,
+            actual: 0,
+            atRisk: 0,
+            coverage: "OK" as const,
+          };
+        }
+
+        const counted = availability[index].filter(
+          (person) =>
+            (!rule.department || person.department === rule.department) &&
+            (!rule.shiftId || person.shiftId === rule.shiftId) &&
+            (!rule.projectId || person.projectIds.includes(rule.projectId)),
+        );
+
+        const actual = counted.filter((person) => !person.away).length;
+        return {
+          date: iso,
+          applies: true,
+          closed: false,
+          actual,
+          /** People whose leave for this day is asked for but not granted. */
+          atRisk: counted.filter((person) => person.mightBeAway && !person.away).length,
+          coverage: assess(shape, actual),
+        };
+      });
+
+      const live = cells.filter((cell) => cell.applies);
+      return {
+        id: rule.id,
+        name: rule.name,
+        summary: describeRule(shape),
+        projectName: rule.project?.name ?? null,
+        department: rule.department,
+        shiftName: rule.shift?.name ?? null,
+        minimumPeople: rule.minimumPeople,
+        maximumPeople: rule.maximumPeople,
+        cells,
+        verdict: weekVerdict(live.map((cell) => cell.coverage)),
+        worstShortfall: Math.max(
+          0,
+          ...live.map((cell) => shortfall(shape, cell.actual)),
+        ),
+      };
+    });
+
+    return {
+      days,
+      rules: assessed,
+      totals: {
+        short: assessed.filter((rule) => rule.verdict === "SHORT").length,
+        over: assessed.filter((rule) => rule.verdict === "OVER").length,
+        /** Rule-days that are short, which is the size of the problem. */
+        shortDays: assessed.reduce(
+          (sum, rule) =>
+            sum + rule.cells.filter((cell) => cell.applies && cell.coverage === "SHORT").length,
+          0,
+        ),
       },
     };
   },

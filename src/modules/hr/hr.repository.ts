@@ -628,6 +628,39 @@ export const hrRepository = {
     return db.leaveRequest.update({ where: { id }, data });
   },
 
+  // -- Staffing rules -------------------------------------------------------
+
+  listStaffingRules(includeInactive = false) {
+    return db.staffingRule.findMany({
+      where: includeInactive ? undefined : { isActive: true },
+      orderBy: [{ name: "asc" }],
+      include: {
+        project: { select: { id: true, name: true } },
+        shift: { select: { id: true, name: true } },
+      },
+    });
+  },
+
+  findStaffingRule(id: string) {
+    return db.staffingRule.findUnique({ where: { id } });
+  },
+
+  createStaffingRule(
+    data: Omit<Prisma.StaffingRuleUncheckedCreateInput, "organisationId">,
+  ) {
+    return db.staffingRule.create({
+      data: { ...data, organisationId: tenant() },
+    });
+  },
+
+  updateStaffingRule(id: string, data: Prisma.StaffingRuleUncheckedUpdateInput) {
+    return db.staffingRule.update({ where: { id }, data });
+  },
+
+  deleteStaffingRule(id: string) {
+    return db.staffingRule.delete({ where: { id } });
+  },
+
   /** The roles one person holds, for deciding whose rung an approval is. */
   async roleIdsOf(userId: string | null) {
     if (!userId) return [];
