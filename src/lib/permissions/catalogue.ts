@@ -33,6 +33,12 @@ export const PERMISSIONS = {
   "core.users.view": MODULES.CORE,
   "core.users.manage": MODULES.CORE,
   "core.roles.manage": MODULES.CORE,
+  /// Defining who approves what, and in which order. Separate from approving
+  /// anything: the person who decides that a tender over R5m needs the MD is
+  /// not necessarily the MD, and somebody who can rewrite the chain can
+  /// approve anything by writing themselves into it.
+  "core.workflow.view": MODULES.CORE,
+  "core.workflow.manage": MODULES.CORE,
   "core.audit.view": MODULES.CORE,
 
   // CRM
@@ -191,6 +197,8 @@ export const SYSTEM_ROLES: Record<
       "documents.document.view",
       "reports.dashboard.view",
       "reports.export",
+      // Sees the chain they sit in, without being able to rewrite it.
+      "core.workflow.view",
     ],
   },
   project_manager: {
@@ -246,6 +254,7 @@ export const SYSTEM_ROLES: Record<
       "hr.roster.view",
       "hr.roster.manage",
       "core.users.view",
+      "core.workflow.view",
       "documents.document.view",
       "documents.document.upload",
       "reports.dashboard.view",

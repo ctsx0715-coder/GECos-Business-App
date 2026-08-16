@@ -172,6 +172,30 @@ so the number on the screen before submitting is the number that is charged.
 A cycle is the calendar year. An organisation whose leave year runs March to
 February is a policy answer we do not have yet, and it changes one function.
 
+## Approvals
+
+Who may approve what is a chain, not a permission. The permission says a person
+*can* approve; the chain says *which* approvals reach them, in what order, and
+what has to happen before theirs counts. The engine behind it is ADR-006 —
+linear ordered steps, approvers resolved by role, by the requester's manager or
+by name, and conditions limited to a scalar on the triggering record.
+
+The engine has enforced these since the tender module. What did not exist until
+now was any way to write a chain down without a deployment, which meant the
+answer to "not everybody can approve this" was whatever the seed happened to
+say. **Support → Approval chains** is that screen.
+
+Reading and writing are separate permissions on purpose: somebody who can
+rewrite a chain can approve anything by writing themselves into it, so
+`core.workflow.manage` is a strictly larger power than any single approval, and
+the finance manager who wants to see where their step sits does not need it.
+
+Two rules stop a chain that cannot work. It may not be switched on with no
+steps — the engine finds nothing applicable and the record sails through, which
+is worse than an obviously inactive chain. And two chains may not share a
+trigger, because the engine takes the first it finds and the second would be a
+rule somebody wrote and nobody applies.
+
 ## Architecture in one page
 
 Every request flows in one direction, and each layer has one job:
