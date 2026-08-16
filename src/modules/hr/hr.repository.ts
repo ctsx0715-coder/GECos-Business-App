@@ -12,6 +12,16 @@ function tenant() {
   return requireRequestContext().organisationId;
 }
 
+const SHIFT_SUMMARY = {
+  select: {
+    id: true,
+    name: true,
+    startsAtMinutes: true,
+    endsAtMinutes: true,
+    breakMinutes: true,
+  },
+} as const;
+
 const EMPLOYEE_SUMMARY = {
   id: true,
   firstName: true,
@@ -40,7 +50,8 @@ export const hrRepository = {
         manager: { select: EMPLOYEE_SUMMARY },
         reports: { select: EMPLOYEE_SUMMARY },
         user: { select: { id: true, email: true } },
-        workPattern: true,
+        workPattern: { include: { shift: SHIFT_SUMMARY } },
+        shift: SHIFT_SUMMARY,
         leaveBalances: {
           include: { leaveType: true },
           orderBy: { cycleStartsAt: "desc" },
@@ -354,8 +365,22 @@ export const hrRepository = {
       where: { employeeId: { in: employeeIds } },
       orderBy: [{ startsOn: "desc" }],
       include: {
-        workPattern: { select: { id: true, name: true, maxConsecutiveTurns: true } },
-        shift: { select: { id: true, name: true } },
+        // The whole pattern, not just its name: the month view works out
+        // which days somebody was due in *on each day of the month*, and a
+        // month containing a rotation change needs the shape of both.
+        workPattern: {
+          select: {
+            id: true,
+            name: true,
+            maxConsecutiveTurns: true,
+            cycleDays: true,
+            workingDayIndexes: true,
+            anchorOn: true,
+            hoursPerDay: true,
+            shift: SHIFT_SUMMARY,
+          },
+        },
+        shift: SHIFT_SUMMARY,
       },
     });
   },
@@ -465,12 +490,17 @@ export const hrRepository = {
   },
 
   /** Assignments overlapping a window, with enough to render a roster row. */
-  listAssignments(from: Date, to: Date, filter?: { projectId?: string }) {
+  listAssignments(
+    from: Date,
+    to: Date,
+    filter?: { projectId?: string; employeeId?: string },
+  ) {
     return db.rosterAssignment.findMany({
       where: {
         startsAt: { lte: to },
         endsAt: { gte: from },
         ...(filter?.projectId ? { projectId: filter.projectId } : {}),
+        ...(filter?.employeeId ? { employeeId: filter.employeeId } : {}),
       },
       orderBy: { startsAt: "asc" },
       include: {

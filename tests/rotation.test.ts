@@ -457,6 +457,184 @@ describe("the fairness watch", () => {
   });
 });
 
+/**
+ * One person's month.
+ *
+ * The case that justifies the whole turns table is a month with a rotation
+ * change in the middle of it: the days before the 15th come from one pattern
+ * and the days after from another, and any calendar built from "the pattern
+ * this person is on now" is wrong for half of it.
+ */
+describe("the month view", () => {
+  const JAN = { year: 2026, month: 1 };
+
+  it("marks the days somebody is due in, and the days they are not", async () => {
+    const office = await officeWeek();
+    const anele = await anEmployee("Anele");
+
+    await as("hr_manager", () =>
+      hrService.assignPatterns({
+        employeeIds: [anele.id],
+        workPatternId: office.id,
+        startsOn: day("2025-12-01"),
+        weeks: null,
+      }),
+    );
+
+    const month = await as("hr_manager", () =>
+      hrService.monthFor(anele.id, JAN.year, JAN.month),
+    );
+
+    expect(month.days).toHaveLength(31);
+    // Thursday 1 January 2026 is New Year's Day, but no holidays are seeded
+    // here — this is the pattern alone, Monday to Friday.
+    expect(month.days[0].date).toBe("2026-01-01");
+    expect(month.days[0].due).toBe(true);
+    // Saturday 3rd and Sunday 4th.
+    expect(month.days[2].due).toBe(false);
+    expect(month.days[3].due).toBe(false);
+    expect(month.totals.due).toBe(22);
+  });
+
+  it("changes pattern mid-month when the turn does", async () => {
+    const office = await officeWeek();
+    const night = await nights(); // Monday to Saturday
+    const anele = await anEmployee("Anele");
+
+    await as("hr_manager", () =>
+      hrService.assignPatterns({
+        employeeIds: [anele.id],
+        workPatternId: office.id,
+        startsOn: day("2025-12-01"),
+        weeks: null,
+      }),
+    );
+    await as("hr_manager", () =>
+      hrService.assignPatterns({
+        employeeIds: [anele.id],
+        workPatternId: night.id,
+        startsOn: day("2026-01-19"),
+        weeks: 4,
+      }),
+    );
+
+    const month = await as("hr_manager", () =>
+      hrService.monthFor(anele.id, JAN.year, JAN.month),
+    );
+    const on = (date: string) => month.days.find((row) => row.date === date)!;
+
+    // Saturday 10 January: still the office week, so not a working day.
+    expect(on("2026-01-10").due).toBe(false);
+    expect(on("2026-01-10").patternName).toBe("Office week");
+
+    // Saturday 24 January: the six-day turn has started.
+    expect(on("2026-01-24").due).toBe(true);
+    expect(on("2026-01-24").patternName).toBe("Night rotation");
+  });
+
+  it("does not charge a public holiday as a working day", async () => {
+    const office = await officeWeek();
+    const anele = await anEmployee("Anele");
+    await as("hr_manager", () =>
+      hrService.assignPatterns({
+        employeeIds: [anele.id],
+        workPatternId: office.id,
+        startsOn: day("2025-12-01"),
+      }),
+    );
+    await as("hr_manager", () =>
+      hrService.generateStatutoryHolidays({ year: 2026 }),
+    );
+
+    const month = await as("hr_manager", () =>
+      hrService.monthFor(anele.id, JAN.year, JAN.month),
+    );
+    const newYear = month.days[0];
+
+    expect(newYear.holiday).toBe("New Year's Day");
+    expect(newYear.due).toBe(false);
+    expect(month.totals.due).toBe(21);
+  });
+
+  it("does not mark leave on a day they were never working", async () => {
+    const office = await officeWeek();
+    const employee = await anEmployee("Anele", { userId: org.userIds.employee });
+    await as("hr_manager", () =>
+      hrService.assignPatterns({
+        employeeIds: [employee.id],
+        workPatternId: office.id,
+        startsOn: day("2025-12-01"),
+      }),
+    );
+
+    const type = await as("hr_manager", () =>
+      hrService.createLeaveType({
+        code: "ANNUAL",
+        name: "Annual leave",
+        daysPerCycle: 21,
+        // Backdating allowed so the test can use a fixed January rather than
+        // a moving target, which is what every other date here is.
+        allowsBackdating: true,
+      }),
+    );
+    await as("hr_manager", () =>
+      hrService.setBalance({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        cycleStartsAt: day("2026-01-01"),
+        cycleEndsAt: day("2026-12-31"),
+        entitledDays: 21,
+      }),
+    );
+    // Friday 30 January to Monday 2 February — the request covers a weekend.
+    await as("hr_manager", () =>
+      hrService.requestLeave({
+        employeeId: employee.id,
+        leaveTypeId: type.id,
+        startsAt: day("2026-01-30"),
+        endsAt: day("2026-02-02"),
+      }),
+    );
+
+    const month = await as("hr_manager", () =>
+      hrService.monthFor(employee.id, JAN.year, JAN.month),
+    );
+    const on = (date: string) => month.days.find((row) => row.date === date)!;
+
+    expect(on("2026-01-30").leave?.typeName).toBe("Annual leave");
+    // The Saturday is covered by the request and cost nothing, so calling it
+    // leave on the calendar would contradict the day count.
+    expect(on("2026-01-31").leave).toBeNull();
+    expect(month.totals.onLeave).toBe(1);
+    // 22 working days in January, less the one spent on leave.
+    expect(month.totals.due).toBe(21);
+  });
+
+  it("is your own to look at without any permission", async () => {
+    const office = await officeWeek();
+    const employee = await anEmployee("Anele", { userId: org.userIds.employee });
+    await as("hr_manager", () =>
+      hrService.assignPatterns({
+        employeeIds: [employee.id],
+        workPatternId: office.id,
+        startsOn: day("2025-12-01"),
+      }),
+    );
+
+    const mine = await as("employee", () =>
+      hrService.monthFor(employee.id, JAN.year, JAN.month),
+    );
+    expect(mine.employee.name).toBe("Anele Dlamini");
+  });
+
+  it("is not somebody else's to look at", async () => {
+    const other = await anEmployee("Pieter");
+    await expect(
+      as("employee", () => hrService.monthFor(other.id, JAN.year, JAN.month)),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});
+
 describe("the history behind a turn", () => {
   it("closes the previous turn the day before the new one starts", async () => {
     const office = await officeWeek();

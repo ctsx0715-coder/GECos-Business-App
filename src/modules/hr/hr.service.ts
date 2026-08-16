@@ -48,13 +48,15 @@ import {
   fairnessConcern,
   startOfUtcDay,
   turnEndsOn,
+  turnInForce,
 } from "./rotation";
-import { spanMinutes } from "./shifts";
+import { describeShift, spanMinutes, workedHours } from "./shifts";
 import {
   DEFAULT_PATTERN,
   PATTERN_ANCHOR,
   workingDaysBetween as countWorkingDays,
   workingDaysIn,
+  worksOn,
   type WorkPatternShape,
 } from "./work-patterns";
 
@@ -1045,6 +1047,148 @@ export const hrService = {
 
     await hrRepository.deletePatternAssignment(assignmentId);
     return { employeeId: turn.employeeId };
+  },
+
+  /**
+   * One person's month, day by day.
+   *
+   * The roster answers "who is on site this week", which is a foreman's
+   * question. This answers "what am I working next month", which is the
+   * question the person themselves asks — and which, until now, nothing in the
+   * system would answer without four screens and some mental arithmetic.
+   *
+   * Each day is resolved from the turn in force *on that day* rather than from
+   * the pattern the employee record currently points at. A month containing a
+   * rotation change is the whole reason the turns are stored: on the 14th they
+   * were on days and on the 15th they are on nights, and a calendar that
+   * flattens that is wrong for half the month.
+   */
+  async monthFor(employeeId: string, year: number, month: number) {
+    await this.assertMaySeeEmployee(employeeId);
+
+    const employee = await hrRepository.findEmployee(employeeId);
+    if (!employee) throw new NotFoundError("Employee");
+
+    // `month` is 1-based, as anybody typing a date would write it. Day 0 of
+    // the next month is the last day of this one, leap years included.
+    const from = new Date(Date.UTC(year, month - 1, 1));
+    const to = new Date(Date.UTC(year, month, 0));
+
+    const [holidays, turns, placements, leave] = await Promise.all([
+      hrRepository.listHolidays(from, to),
+      hrRepository.turnsFor([employeeId]),
+      hrRepository.listAssignments(from, to, { employeeId }),
+      hrRepository.listLeaveRequests({ employeeId }),
+    ]);
+
+    const holidayNames = new Map(
+      holidays.map((holiday) => [isoDate(holiday.observedOn), holiday.name]),
+    );
+    const standing = await this.patternForEmployee(employee);
+    const relevantLeave = leave.filter(
+      (request) =>
+        request.startsAt <= to &&
+        request.endsAt >= from &&
+        (request.status === "SUBMITTED" || request.status === "APPROVED"),
+    );
+
+    const days = [];
+    for (
+      const day = new Date(from);
+      day <= to;
+      day.setUTCDate(day.getUTCDate() + 1)
+    ) {
+      const on = new Date(day);
+      const iso = isoDate(on);
+
+      /*
+       * Every turn, including ones that have not started yet: a turn written
+       * for the 15th is the answer for the 15th, and a calendar somebody opens
+       * to see what they are working next month is precisely where a planned
+       * rotation should already show.
+       */
+      const turn = turnInForce(turns, on);
+      const pattern = turn
+        ? {
+            cycleDays: turn.workPattern.cycleDays,
+            workingDayIndexes: turn.workPattern.workingDayIndexes,
+            anchorOn: turn.workPattern.anchorOn,
+          }
+        : standing;
+
+      const holiday = holidayNames.get(iso) ?? null;
+      const due = worksOn(pattern, on) && !holiday;
+
+      /*
+       * Leave only counts on a day they would have worked. A request that
+       * spans a Sunday covers the Sunday, but nothing was spent on it and
+       * colouring it as leave says otherwise — the same rule the day count
+       * has always used, applied to the calendar so the two agree.
+       */
+      const booked = due
+        ? relevantLeave.find(
+            (request) => request.startsAt <= on && request.endsAt >= on,
+          )
+        : undefined;
+      const placement = placements.find(
+        (row) => row.startsAt <= on && row.endsAt >= on,
+      );
+      // Their own shift beats the pattern's, exactly as the rotation writes it.
+      const shift =
+        turn?.shift ??
+        turn?.workPattern.shift ??
+        employee.shift ??
+        employee.workPattern?.shift ??
+        null;
+
+      days.push({
+        date: iso,
+        due,
+        holiday,
+        patternName: turn?.workPattern.name ?? employee.workPattern?.name ?? null,
+        shift: shift
+          ? { name: shift.name, hours: describeShift(shift), worked: workedHours(shift) }
+          : null,
+        leave: booked
+          ? {
+              status: booked.status,
+              typeName: booked.leaveType.name,
+              reference: booked.reference,
+            }
+          : null,
+        placement: placement
+          ? {
+              projectName: placement.project?.name ?? null,
+              note: placement.note,
+            }
+          : null,
+      });
+    }
+
+    // Due, less the days they are away: the days somebody expects them.
+    const working = days.filter((day) => day.due && !day.leave);
+
+    return {
+      employee: {
+        id: employee.id,
+        name: `${employee.firstName} ${employee.lastName}`,
+        jobTitle: employee.jobTitle,
+        employeeNumber: employee.employeeNumber,
+      },
+      from,
+      to,
+      days,
+      totals: {
+        due: working.length,
+        // Hours only where a shift says how long a day is. A pattern with no
+        // shift is an office week nobody clocks, and inventing eight hours
+        // for it would put a number on a screen that nothing stands behind.
+        hours: working.reduce((sum, day) => sum + (day.shift?.worked ?? 0), 0),
+        onLeave: days.filter((day) => day.leave).length,
+        holidays: days.filter((day) => day.holiday).length,
+        placed: days.filter((day) => day.placement).length,
+      },
+    };
   },
 
   // -- Roster ---------------------------------------------------------------

@@ -163,6 +163,16 @@ const NAV: NavItem[] = [
     group: "cycles",
   },
   {
+    href: "/hr/month",
+    label: "Month view",
+    icon: "calendar",
+    moduleKey: "hr",
+    // No permission: it opens on your own month, and there is no permission
+    // for being yourself. Anybody else's is gated in the service.
+    group: "cycles",
+    needsEmployeeRecord: true,
+  },
+  {
     href: "/hr/rotation",
     label: "Rotation",
     icon: "users",

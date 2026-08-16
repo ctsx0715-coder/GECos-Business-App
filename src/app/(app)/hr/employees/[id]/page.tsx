@@ -123,6 +123,9 @@ export default async function EmployeePage({
                 Request leave
               </ButtonLink>
             )}
+            <ButtonLink href={`/hr/month?person=${employee.id}`} icon="calendar">
+              Month
+            </ButtonLink>
             {data.mayEdit && (
               <ButtonLink href={`/hr/employees/${employee.id}/edit`} icon="pencil">
                 Edit

@@ -30,7 +30,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 445 tests against a real database
+pnpm test                   # 451 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -180,6 +180,33 @@ Who works what is visible to everyone who can read the roster, on the same
 reasoning: the crew is not the last to know where the crew is. How often one
 person has drawn nights is not — it is a prompt aimed at whoever assigns the
 work, so it needs `hr.roster.manage`.
+
+### Month view
+
+The roster answers a foreman's question — who is on site next week. **Work
+cycles → Month view** answers the one the person themselves asks, which the
+system could not answer at all without opening four screens: what am I
+working, when am I off, and which of those days are already spoken for.
+
+A calendar rather than a list, because the shape of the month *is* the answer:
+fourteen nights and then a blank week reads at a glance and has to be
+reconstructed line by line from a table. Each day carries its shift, its site
+placement, its public holiday or its leave.
+
+Every day is resolved from the turn in force **on that day**, not from the
+pattern the employee record currently points at. A month with a rotation
+change in the middle of it is the reason the turns are stored: on the 14th
+they were on days and on the 15th they are on nights, and a calendar that
+flattens that is wrong for half the month.
+
+Leave shows only on days they would have worked. A request spanning a Sunday
+covers the Sunday and cost nothing, so colouring it as leave would contradict
+the day count — the same rule the leave arithmetic has always used, applied to
+the calendar so the two agree. "Days due in" is the pattern less holidays and
+less leave: the days somebody actually expects them.
+
+Your own month needs no permission, on the same reasoning as your own leave
+balance. Anybody else's goes through the same check as their record.
 
 ### Roster
 
