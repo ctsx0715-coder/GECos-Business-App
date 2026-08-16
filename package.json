@@ -23,7 +23,8 @@
     "screenshots:lifecycle": "tsx scripts/screenshots-lifecycle.ts",
     "db:sync": "tsx scripts/sync-config.ts",
     "hr:backfill": "tsx scripts/backfill-hr.ts",
-    "hr:accrue": "tsx scripts/run-accrual.ts"
+    "hr:accrue": "tsx scripts/run-accrual.ts",
+    "hr:rotate": "tsx scripts/apply-rotations.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

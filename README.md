@@ -30,7 +30,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 269 tests against a real database
+pnpm test                   # 438 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -50,6 +50,7 @@ in `src/generated/prisma` and is not committed.
 | `pnpm db:seed` | Build a demo dataset from nothing — **truncates every table first** |
 | `pnpm hr:backfill` | Add the HR demo dataset to a database that already has data — additive, idempotent |
 | `pnpm hr:accrue` | Credit leave balances with what they have earned. Runs monthly from Actions |
+| `pnpm hr:rotate` | Move people onto turns that start today. Runs every morning from Actions |
 | `pnpm db:studio` | Browse the database |
 | `pnpm screenshots:lifecycle` | Drives the lifecycle preview and reporting screens, asserting on each |
 
@@ -132,16 +133,57 @@ that are worked — so a fortnightly rotation is the same shape as an ordinary
 week rather than a special case. Each person can have one; anyone without falls
 back to the tenant's default, and a tenant with no default falls back to Monday
 to Friday, which is exactly where the system was before. They live on
-**People → Work patterns**.
+**Work cycles → Work patterns**.
 
 Not yet handled: entitlement is not scaled by pattern. The BCEA's 21 consecutive
 days is 15 working days on a five-day week and 18 on a six-day week, and which
 applies to Nopedi is the same open policy question as the rest of the leave
 rules — so entitlement stays rows somebody writes.
 
+### Rotation
+
+Assigning a pattern one person at a time is fine until a foreman moves a crew
+of eighteen onto nights for a month. That is one decision about a group, so
+**Work cycles → Rotation** takes it as one: tick the people, choose the pattern
+and the shift, say when it starts and how long it runs.
+
+The shift is chosen here rather than only on the pattern, which is what the two
+tables were always for — the same six-day pattern worked on days by one crew
+and nights by another. A person's own shift wins; without one they work the
+hours their pattern carries.
+
+Each assignment is a *turn*, stored as a date range. The employee record keeps
+the current pattern and shift because every screen and every leave calculation
+asks that question, and `pattern_assignments` is the history behind it: since
+when, what came before, and what is written for next month. A turn dated ahead
+takes effect on the day — `pnpm hr:rotate` runs every morning from Actions, and
+anything it missed shows on the screen with a button, so a skipped run is
+visible rather than a roster that is quietly wrong. A turn that ends with
+nothing after it leaves the person where they are; the end date is a plan, not
+a revocation.
+
+**The fairness watch** is why the history exists. On a construction payroll the
+unpopular turns are real — nights, the six-day week, the fortnight away — and
+left to a spreadsheet they land on whoever is easiest to ask. Each pattern says
+how many turns in a row is too many, and the system counts. The office week
+sets no limit, because nobody is hard done by a fourth Monday-to-Friday month
+and a warning that fires on everybody is one nobody reads.
+
+It warns. It never refuses, and that is a decision rather than an omission: a
+rule that blocks a foreman staffing tonight's shift does not produce fairness,
+it produces a foreman who stops recording who is on nights — and a system that
+is wrong about that cannot tell anybody they have had too many. The warning
+appears before the assignment, again after it, and stands on the screen until
+somebody else takes the next turn.
+
+Who works what is visible to everyone who can read the roster, on the same
+reasoning: the crew is not the last to know where the crew is. How often one
+person has drawn nights is not — it is a prompt aimed at whoever assigns the
+work, so it needs `hr.roster.manage`.
+
 ### Roster
 
-Who is on which site, a week at a time, at **People → Roster**. Placements are
+Who is on which site, a week at a time, at **Work cycles → Roster**. Placements are
 date ranges rather than a row per day, because a fortnight on one site is one
 decision — the days inside it come from the person's work pattern, so a
 six-day week shows its Saturday and a rotation shows nothing in its off week.
@@ -163,7 +205,7 @@ holidays are generated per year — including Good Friday and Family Day, which
 move with Easter, and the Public Holidays Act's rule that a holiday falling on
 a Sunday is taken on the Monday — and anything the calculation cannot know is a
 row: a builders' shutdown, an election day proclaimed six weeks out. Both live
-on **People → Public holidays**, and the generator never overwrites a day
+on **Work cycles → Public holidays**, and the generator never overwrites a day
 somebody added by hand.
 
 The leave form counts with the same function and the same days as the service,

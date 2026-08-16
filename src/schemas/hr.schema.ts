@@ -227,6 +227,13 @@ const workPatternFields = {
   hoursPerDay: z.number().positive().max(24).default(8),
   /** Null means the hours are not specified — an office pattern, typically. */
   shiftId: z.uuid().nullable().optional(),
+  /** How long a turn on this pattern runs before people rotate off it. */
+  rotationWeeks: z.number().int().min(1).max(52).nullable().optional(),
+  /**
+   * How many turns in a row is too many. Null exempts the pattern, which is
+   * what the office week wants — the rule exists for nights and six-day weeks.
+   */
+  maxConsecutiveTurns: z.number().int().min(1).max(24).nullable().optional(),
   isDefault: z.boolean().default(false),
 };
 
@@ -261,6 +268,31 @@ export const updateWorkPatternSchema = z
       path: ["workingDayIndexes"],
     },
   );
+
+/**
+ * Putting a group of people on a pattern.
+ *
+ * Bulk by default rather than as a special case, because moving one person is
+ * the rare half of the job: a crew goes onto nights together, and asking for
+ * eighteen separate decisions is how a roster ends up half-updated.
+ */
+export const assignPatternsSchema = z.object({
+  employeeIds: z.array(z.uuid()).min(1, "Choose at least one person."),
+  workPatternId: z.uuid(),
+  /** Null works the pattern's own shift, whatever that is. */
+  shiftId: z.uuid().nullable().optional(),
+  startsOn: z.coerce.date(),
+  /**
+   * How long the turn runs. Null is open-ended, which is what a standing
+   * pattern is — most of the payroll never rotates off Monday to Friday.
+   */
+  weeks: z.number().int().min(1).max(52).nullable().optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+export const cancelTurnSchema = z.object({
+  assignmentId: z.uuid(),
+});
 
 export const addHolidaySchema = z.object({
   observedOn: z.coerce.date(),

@@ -5,8 +5,10 @@ import { requirePermission, hasPermission } from "@/lib/permissions";
 import {
   addHolidaySchema,
   adjustBalanceSchema,
+  assignPatternsSchema,
   assignToRosterSchema,
   cancelLeaveSchema,
+  cancelTurnSchema,
   certificationSchema,
   createEmployeeSchema,
   createLeaveTypeSchema,
@@ -34,6 +36,13 @@ import {
   previousCycle,
 } from "./leave-accrual";
 import { isoDate, statutoryHolidays } from "./public-holidays";
+import {
+  consecutiveTurns,
+  dayBefore,
+  fairnessConcern,
+  startOfUtcDay,
+  turnEndsOn,
+} from "./rotation";
 import { spanMinutes } from "./shifts";
 import {
   DEFAULT_PATTERN,
@@ -741,6 +750,8 @@ export const hrService = {
       anchorOn: PATTERN_ANCHOR,
       hoursPerDay: data.hoursPerDay,
       shiftId: data.shiftId ?? null,
+      rotationWeeks: data.rotationWeeks ?? null,
+      maxConsecutiveTurns: data.maxConsecutiveTurns ?? null,
       isDefault: data.isDefault,
     });
 
@@ -772,6 +783,8 @@ export const hrService = {
 
     const updated = await hrRepository.updateWorkPattern(workPatternId, {
       ...changes,
+      rotationWeeks: changes.rotationWeeks ?? null,
+      maxConsecutiveTurns: changes.maxConsecutiveTurns ?? null,
       workingDayIndexes: unique(changes.workingDayIndexes),
     });
 
@@ -779,6 +792,253 @@ export const hrService = {
       await hrRepository.clearDefaultWorkPattern(workPatternId);
     }
     return updated;
+  },
+
+  // -- Rotation -------------------------------------------------------------
+
+  /**
+   * Everybody, where they stand, and whether it has gone on too long.
+   *
+   * One call rather than a query per person, because this is the whole payroll
+   * on one screen and the fairness figure for each of them is the point of
+   * opening it.
+   */
+  async assignmentBoard() {
+    await requirePermission("hr.roster.view");
+
+    const employees = await hrRepository.listAssignableEmployees();
+    if (employees.length === 0) return [];
+
+    const turns = await hrRepository.turnsFor(employees.map((row) => row.id));
+    const today = startOfUtcDay(new Date());
+
+    /*
+     * Anybody without a pattern of their own works the tenant's default, and
+     * the board has to say which one that is. Reporting them as "default
+     * pattern" would hide both the days they work and the fairness limit the
+     * default carries — and a screen about who works what should not be the
+     * one place that declines to answer.
+     */
+    const fallback = await hrRepository.findDefaultWorkPattern();
+
+    return employees.map((employee) => {
+      // Newest first, as the repository returned them.
+      const theirs = turns.filter((turn) => turn.employeeId === employee.id);
+      const taken = theirs.filter((turn) => turn.appliedAt !== null);
+      const upcoming = theirs
+        .filter((turn) => turn.appliedAt === null)
+        .sort((a, b) => a.startsOn.getTime() - b.startsOn.getTime())[0];
+
+      /*
+       * The run is counted from turns recorded here, not from the pattern the
+       * employee record happens to point at. Somebody put on nights by hand
+       * before this screen existed has no turns behind them and starts at
+       * zero — which under-counts, and is the right way round to be wrong: the
+       * watch should not accuse anybody on the strength of a history it never
+       * saw.
+       */
+      const current = taken[0] ?? null;
+      const pattern = employee.workPattern ?? fallback;
+      const run = employee.workPatternId
+        ? consecutiveTurns(taken, employee.workPatternId)
+        : 0;
+      const limit = pattern?.maxConsecutiveTurns ?? null;
+
+      return {
+        id: employee.id,
+        name: `${employee.firstName} ${employee.lastName}`,
+        employeeNumber: employee.employeeNumber,
+        jobTitle: employee.jobTitle,
+        department: employee.department,
+        patternId: employee.workPatternId,
+        patternName: pattern?.name ?? null,
+        /** True when it is the tenant's default rather than their own. */
+        onDefaultPattern: employee.workPatternId === null,
+        // Their own override, or the hours the pattern is worked on.
+        shiftName: employee.shift?.name ?? pattern?.shift?.name ?? null,
+        since: current?.startsOn ?? null,
+        until: current?.endsOn ?? null,
+        turns: run,
+        limit,
+        concern: fairnessConcern({
+          employeeName: `${employee.firstName} ${employee.lastName}`,
+          patternName: pattern?.name ?? "this pattern",
+          turns: run,
+          limit,
+        }),
+        next: upcoming
+          ? {
+              id: upcoming.id,
+              startsOn: upcoming.startsOn,
+              endsOn: upcoming.endsOn,
+              patternName: upcoming.workPattern.name,
+              shiftName: upcoming.shift?.name ?? null,
+              /* Its day has come and it has not taken effect — the overnight
+               * job has not run yet, or did not run at all. The screen says
+               * so and offers the button rather than writing on a page load. */
+              due: startOfUtcDay(upcoming.startsOn) <= today,
+            }
+          : null,
+      };
+    });
+  },
+
+  /**
+   * Putting a group of people on a pattern.
+   *
+   * The fairness rule is checked here and reported back; it never refuses.
+   * That is a decision rather than an oversight — see `rotation.ts`. A foreman
+   * who cannot record that Refilwe is on nights again will staff the shift
+   * anyway and leave the system wrong, and a system that is wrong about who is
+   * on nights cannot tell anybody they have had too many.
+   */
+  async assignPatterns(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const data = assignPatternsSchema.parse(input);
+
+    const pattern = await hrRepository.findWorkPattern(data.workPatternId);
+    if (!pattern) throw new NotFoundError("Work pattern");
+    if (!pattern.isActive) {
+      throw new BusinessRuleError(
+        `${pattern.name} has been retired. Choose a pattern that is still in use.`,
+      );
+    }
+
+    if (data.shiftId) {
+      const shift = await hrRepository.findShift(data.shiftId);
+      if (!shift) throw new NotFoundError("Shift");
+      if (!shift.isActive) {
+        throw new BusinessRuleError(`${shift.name} has been retired.`);
+      }
+    }
+
+    const startsOn = startOfUtcDay(data.startsOn);
+    const endsOn = data.weeks ? turnEndsOn(startsOn, data.weeks) : null;
+    const today = startOfUtcDay(new Date());
+    const takesEffectNow = startsOn <= today;
+
+    const everybody = await hrRepository.listAssignableEmployees();
+    const chosen = everybody.filter((row) => data.employeeIds.includes(row.id));
+    if (chosen.length !== data.employeeIds.length) {
+      throw new NotFoundError("Employee");
+    }
+
+    const history = await hrRepository.turnsFor(data.employeeIds);
+    const concerns: string[] = [];
+
+    for (const employee of chosen) {
+      const prior = history.filter(
+        (turn) =>
+          turn.employeeId === employee.id &&
+          turn.appliedAt !== null &&
+          startOfUtcDay(turn.startsOn) < startsOn,
+      );
+
+      const concern = fairnessConcern({
+        employeeName: `${employee.firstName} ${employee.lastName}`,
+        patternName: pattern.name,
+        // The turn being assigned is the one that might tip it over.
+        turns: consecutiveTurns(prior, pattern.id) + 1,
+        limit: pattern.maxConsecutiveTurns,
+      });
+      if (concern) concerns.push(concern);
+
+      await hrRepository.closeTurnsBefore(
+        employee.id,
+        startsOn,
+        dayBefore(startsOn),
+      );
+      await hrRepository.supersedeTurnsOn(employee.id, startsOn);
+
+      const turn = await hrRepository.createPatternAssignment({
+        employeeId: employee.id,
+        workPatternId: pattern.id,
+        shiftId: data.shiftId ?? null,
+        startsOn,
+        endsOn,
+        note: data.note,
+        appliedAt: takesEffectNow ? new Date() : null,
+      });
+
+      if (takesEffectNow) {
+        await hrRepository.setEmployeePattern(employee.id, {
+          workPatternId: pattern.id,
+          shiftId: data.shiftId ?? null,
+        });
+      } else {
+        // Nothing to do until the day arrives; `applyDueTurns` picks it up.
+        void turn;
+      }
+    }
+
+    return {
+      assigned: chosen.length,
+      takesEffectNow,
+      startsOn,
+      endsOn,
+      concerns,
+    };
+  },
+
+  /**
+   * Moves people onto turns whose start date has arrived.
+   *
+   * A turn written for next month has to take effect without anybody
+   * remembering, which is a job rather than a page load: `pnpm hr:rotate` runs
+   * it every morning. The rotation screen shows anything due that has not been
+   * applied and offers a button for it, so a skipped run is visible and
+   * fixable — rendering a page does not quietly write to the database.
+   *
+   * A turn that *ends* with nothing written after it leaves the person exactly
+   * where they are. The end date is a plan, not a revocation — reverting them
+   * to a pattern nobody chose would be the system inventing a decision, and on
+   * the morning after a rotation ends that decision is somebody's shift.
+   */
+  async applyDueTurns(asOf = new Date()) {
+    await requirePermission("hr.roster.manage");
+    return this.applyDueTurnsWithoutPermissionCheck(asOf);
+  },
+
+  /** The same, for the scheduled runner, which has no user to check. */
+  async applyDueTurnsWithoutPermissionCheck(asOf = new Date()) {
+    const due = await hrRepository.dueTurns(startOfUtcDay(asOf));
+    const applied: string[] = [];
+
+    for (const turn of due) {
+      await hrRepository.setEmployeePattern(turn.employeeId, {
+        workPatternId: turn.workPatternId,
+        shiftId: turn.shiftId,
+      });
+      await hrRepository.updatePatternAssignment(turn.id, {
+        appliedAt: new Date(),
+      });
+      applied.push(`${turn.employee.firstName} ${turn.employee.lastName}`);
+    }
+
+    return { applied };
+  },
+
+  /**
+   * Calls off a turn that has not started yet.
+   *
+   * One that has taken effect is history, and history is not edited: the way
+   * to change what somebody is working now is to assign them something else,
+   * which leaves both facts in the record.
+   */
+  async cancelTurn(input: unknown) {
+    await requirePermission("hr.roster.manage");
+    const { assignmentId } = cancelTurnSchema.parse(input);
+
+    const turn = await hrRepository.findPatternAssignment(assignmentId);
+    if (!turn) throw new NotFoundError("Assignment");
+    if (turn.appliedAt) {
+      throw new BusinessRuleError(
+        "This turn has already started. Assign a new pattern instead of removing it.",
+      );
+    }
+
+    await hrRepository.deletePatternAssignment(assignmentId);
+    return { employeeId: turn.employeeId };
   },
 
   // -- Roster ---------------------------------------------------------------

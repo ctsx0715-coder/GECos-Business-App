@@ -83,6 +83,10 @@ interface PatternValues {
   cycleDays: number;
   workingDayIndexes: number[];
   hoursPerDay: number;
+  /** 0 stands for "nobody rotates off this", which is most patterns. */
+  rotationWeeks: number;
+  /** 0 stands for "not watched" — the office week wants exactly that. */
+  maxConsecutiveTurns: number;
   isDefault: boolean;
   isActive: boolean;
 }
@@ -173,6 +177,50 @@ function PatternFields({
         </label>
       </div>
 
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-wide text-faint">
+            Rotates every
+          </span>
+          <select
+            value={values.rotationWeeks}
+            onChange={(event) => set("rotationWeeks", Number(event.target.value))}
+            className={inputClass}
+          >
+            <option value={0}>Nobody rotates off it</option>
+            {[1, 2, 3, 4, 6, 8, 12, 26].map((count) => (
+              <option key={count} value={count}>
+                {count} {count === 1 ? "week" : "weeks"}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-wide text-faint">
+            Say something after
+          </span>
+          <select
+            value={values.maxConsecutiveTurns}
+            onChange={(event) =>
+              set("maxConsecutiveTurns", Number(event.target.value))
+            }
+            className={inputClass}
+          >
+            <option value={0}>Never — not an unpopular pattern</option>
+            {[2, 3, 4, 5, 6].map((count) => (
+              <option key={count} value={count}>
+                {count} turns in a row
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <p className="text-xs text-muted">
+        The second one only warns. Nights and six-day weeks are worth watching;
+        the office week is not, and a warning that fires on everybody is one
+        nobody reads.
+      </p>
+
       <div>
         <span className="mb-1.5 block text-[11px] uppercase tracking-wide text-faint">
           Days worked
@@ -234,6 +282,8 @@ const BLANK: PatternValues = {
   cycleDays: 7,
   workingDayIndexes: [0, 1, 2, 3, 4],
   hoursPerDay: 8,
+  rotationWeeks: 0,
+  maxConsecutiveTurns: 0,
   isDefault: false,
   isActive: true,
 };
@@ -277,7 +327,14 @@ export function NewWorkPattern({ shifts }: { shifts: Choice[] }) {
           disabled={pending || !values.code || values.name.trim().length < 2}
           onClick={() =>
             submit(() =>
-              createWorkPatternAction({ ...values, shiftId: values.shiftId || null }),
+              createWorkPatternAction({
+                ...values,
+                shiftId: values.shiftId || null,
+                // Zero is how the form says "no rotation" and "not watched";
+                // the database says both with null.
+                rotationWeeks: values.rotationWeeks || null,
+                maxConsecutiveTurns: values.maxConsecutiveTurns || null,
+              }),
             )
           }
           className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground transition hover:opacity-90 disabled:opacity-50"
@@ -346,6 +403,8 @@ export function WorkPatternEditor({
                 workingDayIndexes: values.workingDayIndexes,
                 hoursPerDay: values.hoursPerDay,
                 shiftId: values.shiftId || null,
+                rotationWeeks: values.rotationWeeks || null,
+                maxConsecutiveTurns: values.maxConsecutiveTurns || null,
                 isDefault: values.isDefault,
                 isActive: values.isActive,
               }),

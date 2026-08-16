@@ -286,7 +286,10 @@ export const hrRepository = {
   },
 
   findDefaultWorkPattern() {
-    return db.workPattern.findFirst({ where: { isDefault: true, isActive: true } });
+    return db.workPattern.findFirst({
+      where: { isDefault: true, isActive: true },
+      include: { shift: { select: { id: true, name: true } } },
+    });
   },
 
   createWorkPattern(
@@ -307,6 +310,141 @@ export const hrRepository = {
       where: { isDefault: true, id: { not: exceptId } },
       data: { isDefault: false },
     });
+  },
+
+  // -- Pattern assignments --------------------------------------------------
+
+  /** Everybody a pattern can be given to, with where they stand today. */
+  listAssignableEmployees() {
+    return db.employee.findMany({
+      where: { status: { in: ["ACTIVE", "ON_LEAVE"] } },
+      orderBy: [{ department: "asc" }, { lastName: "asc" }, { firstName: "asc" }],
+      select: {
+        ...EMPLOYEE_SUMMARY,
+        department: true,
+        status: true,
+        workPatternId: true,
+        shiftId: true,
+        workPattern: {
+          select: {
+            id: true,
+            name: true,
+            maxConsecutiveTurns: true,
+            // The pattern's own shift is what somebody works when they have
+            // no override of their own, so the board cannot report the hours
+            // without it.
+            shift: { select: { id: true, name: true } },
+          },
+        },
+        shift: { select: { id: true, name: true } },
+      },
+    });
+  },
+
+  /**
+   * Every turn these people have had, newest first.
+   *
+   * One query for the whole group rather than one per person: the fairness
+   * watch asks this about the entire payroll on every page load, and eighty
+   * round trips to answer one question is how a screen becomes slow enough
+   * that somebody stops opening it.
+   */
+  turnsFor(employeeIds: string[]) {
+    return db.patternAssignment.findMany({
+      where: { employeeId: { in: employeeIds } },
+      orderBy: [{ startsOn: "desc" }],
+      include: {
+        workPattern: { select: { id: true, name: true, maxConsecutiveTurns: true } },
+        shift: { select: { id: true, name: true } },
+      },
+    });
+  },
+
+  /** Turns running over a window, for the assignment screen's timeline. */
+  turnsBetween(from: Date, to: Date) {
+    return db.patternAssignment.findMany({
+      where: {
+        startsOn: { lte: to },
+        OR: [{ endsOn: null }, { endsOn: { gte: from } }],
+      },
+      orderBy: [{ startsOn: "asc" }],
+      include: {
+        employee: { select: EMPLOYEE_SUMMARY },
+        workPattern: { select: { id: true, name: true } },
+        shift: { select: { id: true, name: true } },
+      },
+    });
+  },
+
+  findPatternAssignment(id: string) {
+    return db.patternAssignment.findUnique({ where: { id } });
+  },
+
+  createPatternAssignment(
+    data: Omit<Prisma.PatternAssignmentUncheckedCreateInput, "organisationId">,
+  ) {
+    return db.patternAssignment.create({
+      data: { ...data, organisationId: tenant() },
+    });
+  },
+
+  updatePatternAssignment(
+    id: string,
+    data: Prisma.PatternAssignmentUncheckedUpdateInput,
+  ) {
+    return db.patternAssignment.update({ where: { id }, data });
+  },
+
+  deletePatternAssignment(id: string) {
+    return db.patternAssignment.delete({ where: { id } });
+  },
+
+  /**
+   * Closes whatever this person is on the day before a new turn opens.
+   *
+   * Only turns that started earlier: a turn already written for a later date
+   * is somebody else's decision about the future, and clipping it silently
+   * would undo a rotation that has already been planned.
+   */
+  closeTurnsBefore(employeeId: string, startsOn: Date, endsOn: Date) {
+    return db.patternAssignment.updateMany({
+      where: {
+        employeeId,
+        startsOn: { lt: startsOn },
+        OR: [{ endsOn: null }, { endsOn: { gte: startsOn } }],
+      },
+      data: { endsOn },
+    });
+  },
+
+  /**
+   * Clears a turn that starts on the same day as the one being written.
+   *
+   * The same person, the same start date, assigned twice: that is a decision
+   * corrected before it could mean anything, not two turns. Keeping both would
+   * leave the fairness count reading a run of two where somebody changed their
+   * mind, and the board unable to say which one is in force. Soft delete, like
+   * everything else, so the corrected version is still in the record.
+   */
+  supersedeTurnsOn(employeeId: string, startsOn: Date) {
+    return db.patternAssignment.deleteMany({ where: { employeeId, startsOn } });
+  },
+
+  /** Turns whose start date has arrived but which have not taken effect yet. */
+  dueTurns(asOf: Date) {
+    return db.patternAssignment.findMany({
+      where: { appliedAt: null, startsOn: { lte: asOf } },
+      orderBy: [{ startsOn: "asc" }],
+      include: { employee: { select: EMPLOYEE_SUMMARY } },
+    });
+  },
+
+  /** Where somebody stands right now, which every other screen reads. */
+  setEmployeePattern(
+    employeeId: string,
+    data: { workPatternId: string; shiftId: string | null },
+  ) {
+    return db.employee.update({ where: { id: employeeId }, data });
   },
 
   /*

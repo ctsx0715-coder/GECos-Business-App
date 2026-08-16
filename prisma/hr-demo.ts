@@ -400,6 +400,8 @@ export const WORK_PATTERNS: Array<{
   cycleDays: number;
   workingDayIndexes: number[];
   hoursPerDay: number;
+  rotationWeeks: number | null;
+  maxConsecutiveTurns: number | null;
   isDefault: boolean;
 }> = [
   {
@@ -409,6 +411,11 @@ export const WORK_PATTERNS: Array<{
     cycleDays: 7,
     workingDayIndexes: [0, 1, 2, 3, 4],
     hoursPerDay: 8,
+    // Nobody rotates off the office week, and nobody is hard done by being on
+    // it — which is why the fairness watch has to be able to leave a pattern
+    // alone. A warning that fires on everybody is one nobody reads.
+    rotationWeeks: null,
+    maxConsecutiveTurns: null,
     isDefault: true,
   },
   {
@@ -419,6 +426,8 @@ export const WORK_PATTERNS: Array<{
     cycleDays: 7,
     workingDayIndexes: [0, 1, 2, 3, 4, 5],
     hoursPerDay: 9,
+    rotationWeeks: 4,
+    maxConsecutiveTurns: 4,
     isDefault: false,
   },
   {
@@ -429,6 +438,10 @@ export const WORK_PATTERNS: Array<{
     cycleDays: 21,
     workingDayIndexes: Array.from({ length: 14 }, (_, index) => index),
     hoursPerDay: 10,
+    // Three weeks is one turn of the cycle, and three of those in a row on
+    // nights is where somebody should be asked whether it is still fair.
+    rotationWeeks: 3,
+    maxConsecutiveTurns: 3,
     isDefault: false,
   },
 ];
@@ -441,6 +454,50 @@ const PATTERN_BY_PERSON: Record<string, string> = {
   "Nomsa Zulu": "SITE_6DAY",
   "Pieter van Wyk": "ROTATION_14_7",
 };
+
+/**
+ * Turns already worked, so the fairness watch has a history to read.
+ *
+ * Pieter has had the night rotation three times running, which is exactly the
+ * limit the pattern sets — the demonstration should open with the system
+ * saying something, because a fairness rule nobody ever sees fire is a claim
+ * rather than a feature. Katlego has a turn written for a fortnight's time and
+ * not yet in force, which is the other half: a rotation is decided before it
+ * starts.
+ */
+const TURNS: Array<{
+  who: string;
+  pattern: string;
+  shift?: string;
+  startsInDays: number;
+  endsInDays: number | null;
+  applied: boolean;
+  note?: string;
+}> = [
+  { who: "Pieter van Wyk", pattern: "ROTATION_14_7", startsInDays: -63, endsInDays: -43, applied: true },
+  { who: "Pieter van Wyk", pattern: "ROTATION_14_7", startsInDays: -42, endsInDays: -22, applied: true },
+  {
+    who: "Pieter van Wyk",
+    pattern: "ROTATION_14_7",
+    startsInDays: -21,
+    endsInDays: -1,
+    applied: true,
+    note: "Third turn running — nobody else is ticketed for the excavator",
+  },
+  { who: "Anele Dlamini", pattern: "SITE_6DAY", startsInDays: -56, endsInDays: -29, applied: true },
+  { who: "Anele Dlamini", pattern: "SITE_6DAY", startsInDays: -28, endsInDays: null, applied: true },
+  { who: "Jacob Mthembu", pattern: "SITE_6DAY", startsInDays: -28, endsInDays: null, applied: true },
+  { who: "Nomsa Zulu", pattern: "SITE_6DAY", startsInDays: -14, endsInDays: null, applied: true },
+  {
+    who: "Katlego Sebego",
+    pattern: "ROTATION_14_7",
+    shift: "NIGHT",
+    startsInDays: 14,
+    endsInDays: 34,
+    applied: false,
+    note: "Taking the night rotation off Pieter",
+  },
+];
 
 /**
  * A week of placements, so the roster opens with something on it.
@@ -464,6 +521,7 @@ const ROSTER: Array<{
 export interface HrDemoSummary {
   shifts: number;
   workPatterns: number;
+  patternTurns: number;
   leaveTypes: number;
   publicHolidays: number;
   rosterAssignments: number;
@@ -508,6 +566,7 @@ export async function seedHrDemo(params: {
   const summary: HrDemoSummary = {
     shifts: 0,
     workPatterns: 0,
+    patternTurns: 0,
     leaveTypes: 0,
     publicHolidays: 0,
     rosterAssignments: 0,
@@ -545,10 +604,19 @@ export async function seedHrDemo(params: {
        * makes: the pattern is not changed, it is completed.
        */
       const shiftId = shiftIds[SHIFT_BY_PATTERN[spec.code]];
-      if (shiftId && !existing.shiftId) {
+      if (
+        (shiftId && !existing.shiftId) ||
+        (spec.rotationWeeks !== null && existing.rotationWeeks === null) ||
+        (spec.maxConsecutiveTurns !== null && existing.maxConsecutiveTurns === null)
+      ) {
         await db.workPattern.update({
           where: { id: existing.id },
-          data: { shiftId },
+          data: {
+            shiftId: existing.shiftId ?? shiftId ?? null,
+            rotationWeeks: existing.rotationWeeks ?? spec.rotationWeeks,
+            maxConsecutiveTurns:
+              existing.maxConsecutiveTurns ?? spec.maxConsecutiveTurns,
+          },
         });
       }
       continue;
@@ -565,6 +633,8 @@ export async function seedHrDemo(params: {
         anchorOn: PATTERN_ANCHOR,
         hoursPerDay: spec.hoursPerDay,
         shiftId: shiftIds[SHIFT_BY_PATTERN[spec.code]] ?? null,
+        rotationWeeks: spec.rotationWeeks,
+        maxConsecutiveTurns: spec.maxConsecutiveTurns,
         isDefault: spec.isDefault,
       },
     });
@@ -740,6 +810,37 @@ export async function seedHrDemo(params: {
       });
       summary.certifications += 1;
     }
+  }
+
+  // ---- Turns on a pattern -------------------------------------------------
+  // The history the fairness watch reads. Employees already point at the
+  // pattern they are on; these rows say since when, and how many times round
+  // it has come to the same person.
+  for (const spec of TURNS) {
+    const employeeId = employeeIds[spec.who];
+    const workPatternId = patternIds[spec.pattern];
+    if (!employeeId || !workPatternId) continue;
+
+    const already = await db.patternAssignment.findFirst({
+      where: { employeeId, startsOn: days(spec.startsInDays) },
+    });
+    if (already) continue;
+
+    await db.patternAssignment.create({
+      data: {
+        organisationId,
+        employeeId,
+        workPatternId,
+        shiftId: spec.shift ? (shiftIds[spec.shift] ?? null) : null,
+        startsOn: days(spec.startsInDays),
+        endsOn: spec.endsInDays === null ? null : days(spec.endsInDays),
+        // A turn that has taken effect is one the employee record already
+        // reflects; one that has not is waiting for the day to arrive.
+        appliedAt: spec.applied ? days(spec.startsInDays) : null,
+        note: spec.note,
+      },
+    });
+    summary.patternTurns += 1;
   }
 
   // ---- Roster -------------------------------------------------------------

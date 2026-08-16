@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { ZodError } from "zod";
 import { withSession } from "@/lib/auth/session";
 import { runFormAction } from "@/lib/forms/run-form-action";
 import { AppError } from "@/lib/errors";
@@ -318,5 +319,66 @@ export async function updateShiftAction(
   );
   revalidatePath("/hr/shifts");
   revalidatePath("/hr/work-patterns");
+  return result;
+}
+
+/**
+ * Bulk assignment, and the warnings it comes back with.
+ *
+ * The result carries the fairness concerns rather than swallowing them,
+ * because the assignment succeeded and the screen still has something to say.
+ * A rule that refused the assignment would be easier to write and would leave
+ * the foreman staffing the shift off the record — see `rotation.ts`.
+ */
+export interface AssignPatternsResult extends ActionResult {
+  assigned?: number;
+  takesEffectNow?: boolean;
+  concerns?: string[];
+}
+
+export async function assignPatternsAction(
+  input: Record<string, unknown>,
+): Promise<AssignPatternsResult> {
+  try {
+    const summary = await withSession(() => hrService.assignPatterns(input));
+    revalidatePath("/hr/rotation");
+    revalidatePath("/hr/roster");
+    revalidatePath("/hr/employees");
+    return {
+      ok: true,
+      assigned: summary.assigned,
+      takesEffectNow: summary.takesEffectNow,
+      concerns: summary.concerns,
+    };
+  } catch (error) {
+    if (error instanceof AppError) return { ok: false, message: error.message };
+    if (error instanceof ZodError) {
+      return { ok: false, message: error.issues[0]?.message ?? "Check the form." };
+    }
+    throw error;
+  }
+}
+
+export async function cancelTurnAction(
+  assignmentId: string,
+): Promise<ActionResult> {
+  const result = await run(() =>
+    withSession(async () => {
+      await hrService.cancelTurn({ assignmentId });
+    }),
+  );
+  revalidatePath("/hr/rotation");
+  return result;
+}
+
+/** Moves people onto turns that were due while nobody was looking. */
+export async function applyDueTurnsAction(): Promise<ActionResult> {
+  const result = await run(() =>
+    withSession(async () => {
+      await hrService.applyDueTurns();
+    }),
+  );
+  revalidatePath("/hr/rotation");
+  revalidatePath("/hr/roster");
   return result;
 }
