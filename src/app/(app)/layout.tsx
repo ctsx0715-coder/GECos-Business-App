@@ -173,6 +173,14 @@ const NAV: NavItem[] = [
     needsEmployeeRecord: true,
   },
   {
+    href: "/hr/payroll",
+    label: "Payroll",
+    icon: "trend",
+    moduleKey: "hr",
+    permission: "hr.payroll.export",
+    group: "cycles",
+  },
+  {
     href: "/hr/coverage",
     label: "Coverage",
     icon: "alert",

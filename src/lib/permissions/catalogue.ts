@@ -124,6 +124,14 @@ export const PERMISSIONS = {
   "hr.timesheet.manage": MODULES.HR,
   "hr.timesheet.approve": MODULES.HR,
 
+  /*
+   * Payroll sits between HR and finance, which is why it is its own verb
+   * rather than part of either. It reads what everybody worked and hands it to
+   * whoever runs the pay run — a narrower thing than managing people and a
+   * wider one than approving a week.
+   */
+  "hr.payroll.export": MODULES.HR,
+
   // Documents
   "documents.document.view": MODULES.DOCUMENTS,
   "documents.document.upload": MODULES.DOCUMENTS,
@@ -211,6 +219,9 @@ export const SYSTEM_ROLES: Record<
       "reports.export",
       // Sees the chain they sit in, without being able to rewrite it.
       "core.workflow.view",
+      // Runs the pay run. Hours, not people: this does not open the employee
+      // register, the leave balances or anybody's medical certificate.
+      "hr.payroll.export",
     ],
   },
   project_manager: {
@@ -274,6 +285,7 @@ export const SYSTEM_ROLES: Record<
       "hr.timesheet.record",
       "hr.timesheet.manage",
       "hr.timesheet.approve",
+      "hr.payroll.export",
       "core.users.view",
       "core.workflow.view",
       "documents.document.view",

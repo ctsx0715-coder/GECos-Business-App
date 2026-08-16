@@ -310,6 +310,7 @@ model Organisation {
   patternAssignments PatternAssignment[]
   staffingRules      StaffingRule[]
   timeEntries        TimeEntry[]
+  payrollPolicy      PayrollPolicy?
 
   @@map("organisations")
 }
@@ -1691,6 +1692,57 @@ model TimeEntry {
   @@index([organisationId, workedOn])
   @@index([employeeId, workedOn])
   @@map("time_entries")
+}
+
+/// How this tenant splits worked hours for payroll.
+///
+/// One row per tenant, and every number in it is a policy rather than a fact
+/// about the software. The defaults are the BCEA's: 45 ordinary hours a week,
+/// nine a day on a five-day week and eight on anything longer, overtime at
+/// one-and-a-half, Sundays and public holidays at double. A bargaining council
+/// agreement raises any of them, and which one binds Nopedi is still open
+/// (docs/02-discovery-questions.md), so they are rows an administrator edits.
+///
+/// What is deliberately not here is anybody's pay rate. The export says how
+/// many hours fell into each category and stops; the payroll package holds the
+/// rates and does the multiplication. That keeps salaries out of a database
+/// that has not yet cleared the RLS and MFA gate, and it is also how every
+/// South African payroll package expects to be fed.
+model PayrollPolicy {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+
+  /// Ordinary hours before overtime starts, on a week of five days or fewer.
+  ordinaryMinutesPerDayShortWeek Int @default(540)
+  /// The same, for somebody working six days — the BCEA's eight-hour day.
+  ordinaryMinutesPerDayLongWeek  Int @default(480)
+  /// Ordinary hours in a week, whatever the daily split. 45 hours.
+  ordinaryMinutesPerWeek         Int @default(2700)
+
+  /// The most overtime the BCEA allows before it stops being lawful. Exceeding
+  /// these does not stop an export — the hours were worked and payroll still
+  /// has to pay them — but every breach is reported.
+  maxOvertimeMinutesPerDay  Int @default(180)
+  maxOvertimeMinutesPerWeek Int @default(600)
+
+  /// What each category is worth, as a multiplier of the ordinary rate. Held
+  /// so the export can carry them for the payroll package to apply; nothing
+  /// here multiplies anything by money.
+  overtimeMultiplier Decimal @default(1.5) @db.Decimal(4, 2)
+  sundayMultiplier   Decimal @default(2.0) @db.Decimal(4, 2)
+  holidayMultiplier  Decimal @default(2.0) @db.Decimal(4, 2)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId])
+  @@map("payroll_policies")
 }
 
 /// How many people a site, a trade or the company needs on a given day.

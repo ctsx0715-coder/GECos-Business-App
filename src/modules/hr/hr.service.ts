@@ -36,6 +36,7 @@ import {
   setBalanceSchema,
   updateEmployeeSchema,
   updateLeaveTypeSchema,
+  updatePayrollPolicySchema,
   updateShiftSchema,
   updateStaffingRuleSchema,
   updateWorkPatternSchema,
@@ -48,6 +49,11 @@ import {
   cycleFor,
   previousCycle,
 } from "./leave-accrual";
+import {
+  breaches,
+  byWeek,
+  splitWeek,
+} from "./payroll";
 import { isoDate, statutoryHolidays } from "./public-holidays";
 import {
   consecutiveTurns,
@@ -1493,6 +1499,177 @@ export const hrService = {
       return;
     }
     await requirePermission("hr.timesheet.manage");
+  },
+
+  // -- Payroll --------------------------------------------------------------
+
+  /**
+   * The tenant's split rules, created with the BCEA's numbers on first read.
+   *
+   * Lazily rather than at tenant creation, because a policy row that exists
+   * only after somebody visits a screen is easier to reason about than one
+   * every seed and backfill has to remember to write — and the defaults are
+   * the statutory floor, so the row that appears is never wrong, only
+   * possibly less generous than an agreement the client has not told us about.
+   */
+  async payrollPolicy() {
+    await requirePermission("hr.payroll.export");
+    return (
+      (await hrRepository.findPayrollPolicy()) ??
+      (await hrRepository.createPayrollPolicy())
+    );
+  },
+
+  async updatePayrollPolicy(input: unknown) {
+    await requirePermission("hr.payroll.export");
+    const data = updatePayrollPolicySchema.parse(input);
+
+    const policy =
+      (await hrRepository.findPayrollPolicy()) ??
+      (await hrRepository.createPayrollPolicy());
+
+    return hrRepository.updatePayrollPolicy(policy.id, data);
+  },
+
+  /**
+   * A pay period, split the way payroll pays it.
+   *
+   * Only signed-off entries are counted. An unapproved entry is not a smaller
+   * number, it is an unanswered question — and paying from one would make the
+   * sign-off ceremonial. What is unapproved is reported alongside, with its
+   * hours, so the person running the pay run can see exactly what they are
+   * about to leave out and go and get it signed.
+   *
+   * No money anywhere. The export carries hours per category and the
+   * multipliers the tenant has configured; the payroll package holds the rates.
+   */
+  async payrollFor(from: Date, to: Date) {
+    await requirePermission("hr.payroll.export");
+
+    const policy =
+      (await hrRepository.findPayrollPolicy()) ??
+      (await hrRepository.createPayrollPolicy());
+
+    const shape = {
+      ordinaryMinutesPerDayShortWeek: policy.ordinaryMinutesPerDayShortWeek,
+      ordinaryMinutesPerDayLongWeek: policy.ordinaryMinutesPerDayLongWeek,
+      ordinaryMinutesPerWeek: policy.ordinaryMinutesPerWeek,
+      maxOvertimeMinutesPerDay: policy.maxOvertimeMinutesPerDay,
+      maxOvertimeMinutesPerWeek: policy.maxOvertimeMinutesPerWeek,
+    };
+
+    const start = startOfUtcDay(from);
+    const end = startOfUtcDay(to);
+
+    const [entries, holidays, employees] = await Promise.all([
+      hrRepository.listTimeEntries(start, end),
+      this.holidayDatesBetween(start, end),
+      hrRepository.listEmployees(["ACTIVE", "ON_LEAVE", "SUSPENDED", "EXITED"]),
+    ]);
+
+    const turns = employees.length
+      ? await hrRepository.turnsFor(employees.map((row) => row.id))
+      : [];
+    const fallback = await hrRepository.findDefaultWorkPattern();
+
+    const people = employees
+      .map((employee) => {
+        const theirs = entries.filter((entry) => entry.employeeId === employee.id);
+        if (theirs.length === 0) return null;
+
+        /*
+         * How many days a week they work decides the ordinary day length, and
+         * it comes from the pattern in force in this period rather than the
+         * one they are on today — a period that contained a rotation is
+         * exactly when the two differ.
+         */
+        const turn = turnInForce(
+          turns.filter((row) => row.employeeId === employee.id),
+          start,
+        );
+        const pattern = turn?.workPattern ?? employee.workPattern ?? fallback;
+        const workingDaysPerWeek = pattern
+          ? (pattern.workingDayIndexes.length * 7) / pattern.cycleDays
+          : 5;
+
+        const signed = theirs.filter(
+          (entry) => entry.approvedAt !== null && entry.clockedOutAt !== null,
+        );
+        const unsigned = theirs.filter(
+          (entry) => entry.approvedAt === null && entry.clockedOutAt !== null,
+        );
+        const running = theirs.filter((entry) => entry.clockedOutAt === null);
+
+        // Two entries on one day are one day's work as far as the split is
+        // concerned: the ordinary ceiling is a property of the day, not of
+        // however many times somebody clocked on during it.
+        const perDay = new Map<string, number>();
+        for (const entry of signed) {
+          const iso = isoDate(entry.workedOn);
+          perDay.set(iso, (perDay.get(iso) ?? 0) + minutesWorked(entry));
+        }
+
+        const days = [...perDay.entries()].map(([date, minutes]) => ({
+          date,
+          minutes,
+          isPublicHoliday: holidays.has(date),
+        }));
+
+        const weeks = [...byWeek(days).entries()].map(([weekStart, inWeek]) => ({
+          weekStart,
+          split: splitWeek(inWeek, shape, workingDaysPerWeek),
+        }));
+
+        const totals = weeks.reduce(
+          (sum, week) => ({
+            ordinary: sum.ordinary + week.split.ordinary,
+            overtime: sum.overtime + week.split.overtime,
+            sunday: sum.sunday + week.split.sunday,
+            holiday: sum.holiday + week.split.holiday,
+            total: sum.total + week.split.total,
+          }),
+          { ordinary: 0, overtime: 0, sunday: 0, holiday: 0, total: 0 },
+        );
+
+        return {
+          employeeId: employee.id,
+          employeeNumber: employee.employeeNumber,
+          name: `${employee.firstName} ${employee.lastName}`,
+          department: employee.department,
+          workingDaysPerWeek,
+          ...totals,
+          breaches: weeks.flatMap((week) => breaches(week.split, shape)),
+          /** Hours left out because nobody has signed for them. */
+          unsignedMinutes: unsigned.reduce(
+            (sum, entry) => sum + minutesWorked(entry),
+            0,
+          ),
+          unsignedEntries: unsigned.length,
+          runningEntries: running.length,
+        };
+      })
+      .filter((row) => row !== null)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
+      from: start,
+      to: end,
+      policy: {
+        overtimeMultiplier: Number(policy.overtimeMultiplier),
+        sundayMultiplier: Number(policy.sundayMultiplier),
+        holidayMultiplier: Number(policy.holidayMultiplier),
+      },
+      people,
+      totals: {
+        ordinary: people.reduce((sum, row) => sum + row.ordinary, 0),
+        overtime: people.reduce((sum, row) => sum + row.overtime, 0),
+        sunday: people.reduce((sum, row) => sum + row.sunday, 0),
+        holiday: people.reduce((sum, row) => sum + row.holiday, 0),
+        unsignedEntries: people.reduce((sum, row) => sum + row.unsignedEntries, 0),
+        runningEntries: people.reduce((sum, row) => sum + row.runningEntries, 0),
+        breaches: people.reduce((sum, row) => sum + row.breaches.length, 0),
+      },
+    };
   },
 
   // -- Staffing and coverage ------------------------------------------------

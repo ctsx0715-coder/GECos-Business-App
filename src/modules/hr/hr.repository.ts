@@ -694,6 +694,20 @@ export const hrRepository = {
     return db.timeEntry.delete({ where: { id } });
   },
 
+  // -- Payroll policy -------------------------------------------------------
+
+  findPayrollPolicy() {
+    return db.payrollPolicy.findFirst();
+  },
+
+  createPayrollPolicy() {
+    return db.payrollPolicy.create({ data: { organisationId: tenant() } });
+  },
+
+  updatePayrollPolicy(id: string, data: Prisma.PayrollPolicyUncheckedUpdateInput) {
+    return db.payrollPolicy.update({ where: { id }, data });
+  },
+
   // -- Staffing rules -------------------------------------------------------
 
   listStaffingRules(includeInactive = false) {
