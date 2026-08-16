@@ -132,6 +132,29 @@ export const PERMISSIONS = {
    */
   "hr.payroll.export": MODULES.HR,
 
+  /*
+   * Health and safety.
+   *
+   * Reporting is deliberately not gated. A near-miss system that asks whether
+   * you are allowed to use it collects nothing, and the whole value of one is
+   * that the man who nearly got hit tells somebody the same afternoon.
+   *
+   * Reading the register is gated, and harder than it looks: these rows carry
+   * named people's injuries, which POPIA treats as special personal
+   * information. So "can file one" and "can read them all" are far apart.
+   *
+   * Closing is separate from investigating, for the same reason a tender
+   * officer cannot approve their own tender: the person who decides an
+   * incident is finished should not be only the person who investigated it.
+   */
+  "hse.incident.view": MODULES.HSE,
+  "hse.incident.report": MODULES.HSE,
+  "hse.incident.investigate": MODULES.HSE,
+  "hse.incident.close": MODULES.HSE,
+  /// Marking your own corrective action done. Held by people who hold none of
+  /// the above — the person who has to fit the handrail is not an investigator.
+  "hse.action.complete": MODULES.HSE,
+
   // Documents
   "documents.document.view": MODULES.DOCUMENTS,
   "documents.document.upload": MODULES.DOCUMENTS,
@@ -258,6 +281,42 @@ export const SYSTEM_ROLES: Record<
       "hr.timesheet.record",
       "hr.timesheet.manage",
       "hr.timesheet.approve",
+      // Safety on their own site. Under the Construction Regulations the
+      // person in charge of the site carries the duty, so they carry the
+      // whole incident lifecycle rather than only the reporting of it.
+      "hse.incident.view",
+      "hse.incident.report",
+      "hse.incident.investigate",
+      "hse.incident.close",
+      "hse.action.complete",
+    ],
+  },
+  /**
+   * Health and safety as its own role.
+   *
+   * Separate from the project manager because on a site of any size it is a
+   * separate person, and separate from HR because the register holds injuries
+   * rather than employment records. They can see enough of both to do the job:
+   * who the injured person is, and which site it happened on.
+   */
+  safety_officer: {
+    name: "Safety Officer",
+    description: "Owns the incident register, investigations and corrective actions.",
+    permissions: [
+      "hse.incident.view",
+      "hse.incident.report",
+      "hse.incident.investigate",
+      // Deliberately without `hse.incident.close`. Whoever investigated an
+      // incident should not also be the one who declares it finished, and a
+      // safety officer under pressure to shrink an open list is precisely the
+      // person that rule exists for. Closing is the site or executive's.
+      "hse.action.complete",
+      // Naming the injured person and the site the incident happened on.
+      "hr.employee.view",
+      "projects.project.view",
+      "documents.document.view",
+      "documents.document.upload",
+      "reports.dashboard.view",
     ],
   },
   /**
@@ -286,6 +345,10 @@ export const SYSTEM_ROLES: Record<
       "hr.timesheet.manage",
       "hr.timesheet.approve",
       "hr.payroll.export",
+      // Injuries reach HR whether or not HR investigates them: a lost-time
+      // injury becomes sick leave, and a COIDA claim needs the employee file.
+      "hse.incident.view",
+      "hse.incident.report",
       "core.users.view",
       "core.workflow.view",
       "documents.document.view",
@@ -308,6 +371,10 @@ export const SYSTEM_ROLES: Record<
       // Clocking yourself in and out. Reading anybody else's card is not
       // baseline, and neither is approving your own.
       "hr.timesheet.record",
+      // Reporting what nearly happened, and saying when you have fixed the
+      // thing you were asked to fix. Neither opens the register.
+      "hse.incident.report",
+      "hse.action.complete",
     ],
   },
 };

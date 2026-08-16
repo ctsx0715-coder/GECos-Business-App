@@ -95,7 +95,12 @@ export function TextField(props: {
   hint?: string;
   required?: boolean;
   multiline?: boolean;
-  type?: "text" | "email" | "tel" | "date";
+  /**
+   * `datetime-local` is here for incidents. A date alone is not enough to
+   * report one: "before the shift change" and "after it" are different
+   * accounts of the same day, and the time is what makes them different.
+   */
+  type?: "text" | "email" | "tel" | "date" | "datetime-local" | "number";
 }) {
   const { label, name, value, onChange, errors, hint, required } = props;
   return (

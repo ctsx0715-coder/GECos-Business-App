@@ -47,6 +47,7 @@ enum EntityType {
   SUPPLIER
   EXPENSE
   LEAVE_REQUEST
+  INCIDENT
 }
 
 enum TenderStatus {
@@ -202,6 +203,45 @@ enum ComplianceCategory {
   ACCREDITATION
 }
 
+/// What happened, on one scale from "nobody was touched" to "somebody died".
+///
+/// One field rather than a kind plus a severity, because the two can
+/// contradict each other and a register that can hold "near miss, fatal" is a
+/// register nobody trusts. The three at the top injure nobody; the five below
+/// are the standard classification a construction safety report is written in,
+/// in the order the injury got worse.
+enum IncidentKind {
+  NEAR_MISS
+  PROPERTY_DAMAGE
+  ENVIRONMENTAL
+  FIRST_AID
+  MEDICAL_TREATMENT
+  LOST_TIME
+  PERMANENT_DISABILITY
+  FATALITY
+}
+
+enum IncidentStatus {
+  REPORTED
+  INVESTIGATING
+  CLOSED
+}
+
+/// The hierarchy of control, strongest first.
+///
+/// Recorded on every corrective action because "issue new PPE" is what a
+/// closed-out action register fills up with, and it is the weakest control
+/// there is — it protects one person, only while they wear it, and only from
+/// the harm it was chosen for. A register that cannot show the difference is a
+/// register that hides it.
+enum ControlType {
+  ELIMINATION
+  SUBSTITUTION
+  ENGINEERING
+  ADMINISTRATIVE
+  PPE
+}
+
 /// How a workflow step resolves its approver (ADR-006).
 enum ApproverType {
   ROLE
@@ -311,6 +351,8 @@ model Organisation {
   staffingRules      StaffingRule[]
   timeEntries        TimeEntry[]
   payrollPolicy      PayrollPolicy?
+  incidents          Incident[]
+  incidentActions    IncidentAction[]
 
   @@map("organisations")
 }
@@ -359,27 +401,30 @@ model User {
   manager      User?        @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
   reports      User[]       @relation("UserManager")
 
-  roles               UserRole[]
-  ownedTenders        Tender[]           @relation("TenderOwner")
-  uploadedVersions    DocumentVersion[]
-  startedWorkflows    WorkflowInstance[] @relation("WorkflowStartedBy")
-  assignedApprovals   WorkflowApproval[] @relation("ApprovalAssignee")
-  decidedApprovals    WorkflowApproval[] @relation("ApprovalDecider")
-  approvedTimeEntries TimeEntry[]        @relation("TimeEntryApprover")
-  stepApproverFor     WorkflowStep[]     @relation("StepApproverUser")
-  stepEscalationFor   WorkflowStep[]     @relation("StepEscalationUser")
-  notifications       Notification[]
-  auditLogs           AuditLog[]
-  ownedLeads          Lead[]             @relation("LeadOwner")
-  ownedOpportunities  Opportunity[]      @relation("OpportunityOwner")
-  activities          Activity[]         @relation("ActivityOwner")
-  managedProjects     Project[]          @relation("ProjectManager")
-  projectMemberships  ProjectMember[]
-  assignedTasks       ProjectTask[]      @relation("TaskAssignee")
-  submittedExpenses   ProjectExpense[]   @relation("ExpenseSubmitter")
-  approvedExpenses    ProjectExpense[]   @relation("ExpenseApprover")
-  employeeRecord      Employee?
-  decidedLeave        LeaveRequest[]     @relation("LeaveDecider")
+  roles                 UserRole[]
+  ownedTenders          Tender[]           @relation("TenderOwner")
+  uploadedVersions      DocumentVersion[]
+  startedWorkflows      WorkflowInstance[] @relation("WorkflowStartedBy")
+  assignedApprovals     WorkflowApproval[] @relation("ApprovalAssignee")
+  decidedApprovals      WorkflowApproval[] @relation("ApprovalDecider")
+  approvedTimeEntries   TimeEntry[]        @relation("TimeEntryApprover")
+  stepApproverFor       WorkflowStep[]     @relation("StepApproverUser")
+  stepEscalationFor     WorkflowStep[]     @relation("StepEscalationUser")
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+  ownedLeads            Lead[]             @relation("LeadOwner")
+  ownedOpportunities    Opportunity[]      @relation("OpportunityOwner")
+  activities            Activity[]         @relation("ActivityOwner")
+  managedProjects       Project[]          @relation("ProjectManager")
+  projectMemberships    ProjectMember[]
+  assignedTasks         ProjectTask[]      @relation("TaskAssignee")
+  submittedExpenses     ProjectExpense[]   @relation("ExpenseSubmitter")
+  approvedExpenses      ProjectExpense[]   @relation("ExpenseApprover")
+  employeeRecord        Employee?
+  decidedLeave          LeaveRequest[]     @relation("LeaveDecider")
+  investigatedIncidents Incident[]         @relation("IncidentInvestigator")
+  closedIncidents       Incident[]         @relation("IncidentCloser")
+  completedActions      IncidentAction[]   @relation("IncidentActionCompleter")
 
   @@unique([organisationId, email])
   @@index([organisationId])
@@ -807,6 +852,7 @@ model Project {
   rosterAssignments RosterAssignment[]
   staffingRules     StaffingRule[]
   timeEntries       TimeEntry[]
+  incidents         Incident[]
 
   @@unique([organisationId, reference])
   @@index([organisationId])
@@ -1307,6 +1353,8 @@ model Employee {
   rosterAssignments  RosterAssignment[]
   patternAssignments PatternAssignment[]
   timeEntries        TimeEntry[]
+  injuries           Incident[]          @relation("IncidentInjured")
+  safetyActions      IncidentAction[]    @relation("IncidentActionOwner")
 
   @@unique([organisationId, employeeNumber])
   @@unique([userId])
@@ -1872,4 +1920,147 @@ model LeaveRequest {
   @@index([organisationId, status])
   @@index([employeeId, startsAt])
   @@map("leave_requests")
+}
+
+// ---------------------------------------------------------------------------
+// Health and safety (OHSA 85 of 1993, Construction Regulations 2014)
+// ---------------------------------------------------------------------------
+
+/// Something that went wrong, or nearly did.
+///
+/// Near misses are in the same table as fatalities on purpose. They are the
+/// same event with a different amount of luck in it, and a register that only
+/// holds the ones that drew blood has thrown away every warning it was given.
+/// The classification decides what happens next; it does not decide whether
+/// the thing is worth writing down.
+///
+/// Two statutory duties hang off these rows and they are not the same duty:
+/// section 24 of the OHSA reports to the Department of Employment and Labour,
+/// and section 39 of COIDA reports to the Compensation Fund. An incident can
+/// owe one, both or neither. Which is which is worked out in
+/// `src/modules/hse/reportability.ts` rather than stored, so that correcting
+/// the rules corrects the whole register rather than only the rows filed after
+/// the fix.
+model Incident {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  /// INC-2026-0001. Generated, because an incident gets referred to by number
+  /// in correspondence with an inspector long after everyone has forgotten it.
+  reference      String
+
+  kind   IncidentKind
+  status IncidentStatus @default(REPORTED)
+
+  occurredAt DateTime @db.Timestamptz(6)
+  /// When it reached this system, which is not when it happened. The gap
+  /// between the two is itself a safety measurement.
+  reportedAt DateTime @default(now()) @db.Timestamptz(6)
+
+  /// The site. Null for the yard or the office, which are not projects.
+  projectId String? @db.Uuid
+  /// Whereabouts on it, in the words somebody would say over the radio.
+  place     String?
+
+  /// Who was hurt, when they are ours.
+  injuredEmployeeId String? @db.Uuid
+  /// Somebody hurt who is not on our payroll — a subcontractor's man, a
+  /// delivery driver, a member of the public. A name rather than a link,
+  /// because we hold no record of them, and neither reporting duty cares
+  /// whose payroll they were on.
+  injuredPersonName String?
+
+  description     String
+  /// What was done at the time: the first aid, the isolation, the make-safe.
+  immediateAction String?
+
+  /// Days the injured person could not do their normal work.
+  ///
+  /// A number rather than a note because the OHSA's reporting duty turns on
+  /// fourteen of them. Null while it is not yet known, which is the usual
+  /// state on the day — and "not yet known" is why the reporting clock is
+  /// worked out fresh each time it is asked rather than stamped on once.
+  daysUnableToWork Int?
+
+  /// Section 24(1)(b) and (c) of the OHSA: a major incident, or a spillage,
+  /// an uncontrolled release under pressure, machinery that fractured and
+  /// threw something, or machinery that ran out of control.
+  ///
+  /// Reportable whether or not anybody was hurt, which is exactly why it
+  /// cannot be derived from the injury and has to be asked.
+  dangerousOccurrence Boolean @default(false)
+
+  /// Filed with the Department of Employment and Labour (OHSA s24).
+  reportedToDepartmentAt DateTime? @db.Timestamptz(6)
+  /// Filed with the Compensation Fund (COIDA s39).
+  reportedToFundAt       DateTime? @db.Timestamptz(6)
+  /// Whatever reference the filing came back with, so it can be found again.
+  externalReference      String?
+
+  investigatedById String?   @db.Uuid
+  rootCause        String?
+  closedAt         DateTime? @db.Timestamptz(6)
+  closedById       String?   @db.Uuid
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation    Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  project         Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  injuredEmployee Employee?    @relation("IncidentInjured", fields: [injuredEmployeeId], references: [id], onDelete: SetNull)
+  investigatedBy  User?        @relation("IncidentInvestigator", fields: [investigatedById], references: [id], onDelete: SetNull)
+  closedBy        User?        @relation("IncidentCloser", fields: [closedById], references: [id], onDelete: SetNull)
+
+  actions IncidentAction[]
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([organisationId, status])
+  @@index([organisationId, occurredAt])
+  @@index([projectId, occurredAt])
+  @@map("incidents")
+}
+
+/// What is being done so it does not happen again.
+///
+/// Separate rows rather than a field on the incident, because an incident
+/// usually needs several and they fall due at different times to different
+/// people. An incident cannot be closed while one of these is open — that
+/// rule is the only thing standing between an action register and a wish list.
+model IncidentAction {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  incidentId     String @db.Uuid
+
+  description String
+  control     ControlType
+
+  /// Who owes it. An employee rather than a user: the person who has to weld
+  /// the handrail back on very often has no login.
+  assignedToEmployeeId String?  @db.Uuid
+  dueAt                DateTime @db.Timestamptz(6)
+
+  completedAt   DateTime? @db.Timestamptz(6)
+  completedById String?   @db.Uuid
+  completedNote String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation       Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  incident           Incident     @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  assignedToEmployee Employee?    @relation("IncidentActionOwner", fields: [assignedToEmployeeId], references: [id], onDelete: SetNull)
+  completedBy        User?        @relation("IncidentActionCompleter", fields: [completedById], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@index([incidentId])
+  @@index([organisationId, dueAt])
+  @@map("incident_actions")
 }

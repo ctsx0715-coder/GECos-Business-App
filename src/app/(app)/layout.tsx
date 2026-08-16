@@ -64,6 +64,7 @@ interface NavItem {
 const CUSTOMERS = { label: "Customers & sales", icon: "users" as const };
 const TENDERS = { label: "Tenders", icon: "file" as const };
 const PEOPLE = { label: "People", icon: "userPlus" as const };
+const SAFETY = { label: "Health & safety", icon: "shield" as const };
 
 const NAV: NavItem[] = [
   {
@@ -238,6 +239,35 @@ const NAV: NavItem[] = [
     permission: "hr.leave.configure",
     group: "main",
     parent: PEOPLE,
+  },
+  {
+    href: "/hse",
+    label: "Safety",
+    icon: "shield",
+    moduleKey: "hse",
+    permission: "hse.incident.view",
+    group: "main",
+    parent: SAFETY,
+  },
+  {
+    href: "/hse/incidents",
+    label: "Incidents",
+    icon: "alert",
+    moduleKey: "hse",
+    permission: "hse.incident.view",
+    group: "main",
+    parent: SAFETY,
+  },
+  {
+    href: "/hse/incidents/new",
+    label: "Report an incident",
+    icon: "plus",
+    moduleKey: "hse",
+    // The one screen in the module everybody can reach. A near-miss system
+    // that asks whether you are allowed to use it collects nothing.
+    permission: "hse.incident.report",
+    group: "main",
+    parent: SAFETY,
   },
   {
     href: "/reports",
