@@ -22,15 +22,7 @@ export function shouldTouchDatabase() {
 
   const environment = process.env.VERCEL_ENV;
 
-  /*
-   * Not on Vercel at all — a developer's machine, or CI. Their database.
-   *
-   * VERCEL_ENV is only exposed when the project has system environment
-   * variables switched on. With it off, a preview build looks exactly like a
-   * laptop from in here and this branch is what let previews migrate
-   * production. `whyItDecided` reports the branch taken on every build so the
-   * mistake cannot be silent again.
-   */
+  // Not on Vercel at all — a developer's machine, or CI. Their database.
   if (!environment) return { ok: true, reason: "local" };
 
   if (environment === "production") return { ok: true, reason: "production" };
@@ -39,6 +31,14 @@ export function shouldTouchDatabase() {
    * The escape hatch, for the day previews get a database of their own. Set
    * it in the Vercel project's preview environment and previews migrate that
    * database instead of skipping.
+   *
+   * It is only safe when the preview environment points at a database of its
+   * own. Set against a DATABASE_URL that is production's, it hands every
+   * preview build the schema production is serving from: an unmerged branch
+   * migrates it, two branches on one commit race the advisory lock, and the
+   * production deploy that follows finds nothing pending and reports success.
+   * That is not hypothetical — it is what happened here through six deploys,
+   * and only became visible once this decision was printed.
    */
   if (process.env.NOPEDI_MIGRATE_ON_PREVIEW === "true") {
     return { ok: true, reason: "preview-opt-in" };

@@ -76,6 +76,14 @@ both builds race for Prisma's advisory lock and one fails. Schema belongs to
 the production deploy. If previews ever get a database of their own, set
 `NOPEDI_MIGRATE_ON_PREVIEW=true` in the preview environment.
 
+> **That flag is currently set on this project's preview environment, and
+> previews still share the production database.** Every build now prints the
+> decision it took and the evidence for it, which is how this was found: a
+> preview build reported `Database writes allowed (preview-opt-in)` and applied
+> a migration to production minutes before the merge did. Until previews have a
+> database of their own, remove `NOPEDI_MIGRATE_ON_PREVIEW` from the Vercel
+> preview environment — the guard then does what the paragraph above describes.
+
 ## Leave
 
 Entitlement is a ledger: a row per person, per leave type, per cycle, holding
