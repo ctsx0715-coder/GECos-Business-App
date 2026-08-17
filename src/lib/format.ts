@@ -18,6 +18,27 @@ export function formatCents(cents: bigint | number | null | undefined): string {
   return ZAR.format(Number(cents) / 100);
 }
 
+const ZAR_EXACT = new Intl.NumberFormat("en-ZA", {
+  style: "currency",
+  currency: "ZAR",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/**
+ * To the cent, for figures that are being checked against a piece of paper.
+ *
+ * The rounded form above is right for a dashboard tile and wrong for a
+ * discrepancy: "billed R93 more" when the figure is R92,50 invites the reply
+ * that the system is out by fifty cents.
+ */
+export function formatCentsExact(
+  cents: bigint | number | null | undefined,
+): string {
+  if (cents === null || cents === undefined) return "—";
+  return ZAR_EXACT.format(Number(cents) / 100);
+}
+
 /** Compact form for dashboard tiles: R31.8m, R450k. */
 export function formatCentsCompact(
   cents: bigint | number | null | undefined,

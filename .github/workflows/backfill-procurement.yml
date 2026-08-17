@@ -1,0 +1,78 @@
+name: Backfill procurement demo data
+
+# Manually triggered, and additive.
+#
+# Same reasoning as the HR and safety backfills: the seed truncates every table
+# before it writes, which is correct for a fresh database and ruinous for this
+# one. This adds the supplier register and the purchase orders and destroys
+# nothing.
+#
+# Run the HR backfill first. Deliveries are signed for by employees looked up
+# by name, so without the people nobody signed for anything.
+#
+# Safe to run twice — it adds only what is missing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type ADD to confirm — this writes demo suppliers, orders and a Buyer login'
+        required: true
+        default: ''
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the confirmation
+        if: inputs.confirm != 'ADD'
+        run: |
+          echo "::error::Confirmation failed. Type ADD exactly to run this."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The procurement tables have to exist before anything can be written
+      # into them. Deploys apply migrations too; this is here so the order
+      # cannot be got wrong by running the two in the wrong sequence.
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm prisma migrate deploy
+
+      # The Buyer role has to exist before a login can be given it, and db:sync
+      # is what writes the system roles. It also switches the procurement
+      # module on for the tenant. VERCEL_ENV is unset here, which the database
+      # guard reads as "not a Vercel build" and allows — the rule it enforces
+      # is about preview deploys, not about this.
+      - name: Sync roles, permissions and modules
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm db:sync
+
+      - name: Backfill
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NOPEDI_DEMO_DATA: 'true'
+        run: pnpm procurement:backfill
+
+      - name: Summary
+        run: |
+          echo "### Procurement data added" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Reload the deployment — no redeploy needed." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Sign in as Naledi Dlamini (Buyer) to raise an order. She" >> $GITHUB_STEP_SUMMARY
+          echo "deliberately cannot approve one, sign for a delivery or" >> $GITHUB_STEP_SUMMARY
+          echo "release an invoice — sign in as Lerato Mokoena (Finance" >> $GITHUB_STEP_SUMMARY
+          echo "Manager) for those, and as a Project Manager to receive." >> $GITHUB_STEP_SUMMARY

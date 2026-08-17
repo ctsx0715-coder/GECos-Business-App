@@ -65,6 +65,7 @@ const CUSTOMERS = { label: "Customers & sales", icon: "users" as const };
 const TENDERS = { label: "Tenders", icon: "file" as const };
 const PEOPLE = { label: "People", icon: "userPlus" as const };
 const SAFETY = { label: "Health & safety", icon: "shield" as const };
+const BUYING = { label: "Buying", icon: "inbox" as const };
 
 const NAV: NavItem[] = [
   {
@@ -268,6 +269,42 @@ const NAV: NavItem[] = [
     permission: "hse.incident.report",
     group: "main",
     parent: SAFETY,
+  },
+  {
+    href: "/procurement",
+    label: "Procurement",
+    icon: "inbox",
+    moduleKey: "procurement",
+    permission: "procurement.order.view",
+    group: "main",
+    parent: BUYING,
+  },
+  {
+    href: "/procurement/orders",
+    label: "Purchase orders",
+    icon: "file",
+    moduleKey: "procurement",
+    permission: "procurement.order.view",
+    group: "main",
+    parent: BUYING,
+  },
+  {
+    href: "/procurement/suppliers",
+    label: "Suppliers",
+    icon: "building",
+    moduleKey: "procurement",
+    permission: "procurement.supplier.view",
+    group: "main",
+    parent: BUYING,
+  },
+  {
+    href: "/procurement/invoices",
+    label: "Supplier invoices",
+    icon: "folder",
+    moduleKey: "procurement",
+    permission: "procurement.invoice.view",
+    group: "main",
+    parent: BUYING,
   },
   {
     href: "/reports",

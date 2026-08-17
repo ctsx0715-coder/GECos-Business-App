@@ -97,7 +97,7 @@ export default async function ProjectDetailPage(props: {
           <Card>
             <CardHeader
               title="Budget"
-              description="Approved costs count as committed, whether or not they are paid"
+              description="Approved costs and approved purchase orders both count as committed, whether or not they are paid"
             />
             <div className="px-5 py-4">
               <BudgetBar
@@ -115,6 +115,16 @@ export default async function ProjectDetailPage(props: {
                   <span className="tabular">
                     {formatCentsCompact(budget.committedCents)}
                   </span>
+                  {budget.orderCount > 0 && (
+                    // Split out because "committed" quietly growing by the
+                    // value of a purchase order is the sort of change a
+                    // project manager should be able to trace to its cause.
+                    <span className="mt-0.5 block text-[11px] text-faint">
+                      incl. {formatCentsCompact(budget.orderedCents)} on{" "}
+                      {budget.orderCount} order
+                      {budget.orderCount === 1 ? "" : "s"}
+                    </span>
+                  )}
                 </Field>
                 <Field label="Pending">
                   <span className="tabular text-warning">
