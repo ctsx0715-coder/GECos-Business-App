@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { withSession } from "@/lib/auth/session";
 import { NotFoundError } from "@/lib/errors";
+import { inventoryService } from "@/modules/inventory/inventory.service";
 import { projectService } from "@/modules/projects/project.service";
 import {
   Badge,
@@ -49,6 +50,9 @@ export default async function ProjectDetailPage(props: {
       return {
         project: await projectService.getById(id),
         budget: await projectService.budgetHealth(id),
+        drawn: session.permissions.has("inventory.stock.view")
+          ? await inventoryService.issuedTo(id)
+          : null,
         session,
       };
     } catch (error) {
@@ -58,7 +62,7 @@ export default async function ProjectDetailPage(props: {
   });
 
   if (!data) notFound();
-  const { project, budget, session } = data;
+  const { project, budget, drawn, session } = data;
   const canManageTeam = session.permissions.has("projects.team.manage");
   const { users } = canManageTeam
     ? await formChoices()
@@ -139,6 +143,37 @@ export default async function ProjectDetailPage(props: {
                   </span>
                 </Field>
               </dl>
+
+              {drawn && drawn.movements.length > 0 && (
+                /*
+                 * Drawn from the stores, and deliberately outside the budget
+                 * arithmetic above rather than added to it.
+                 *
+                 * Most material a site draws was bought on an order that named
+                 * the site, and that order is already counted as committed.
+                 * Adding the issue on top would count the same cement twice —
+                 * once when it was ordered and again when it was carried out
+                 * of the store — and a project manager told they are R400 000
+                 * over on a job that is fine stops reading the number.
+                 *
+                 * It is still worth showing, because material bought for the
+                 * yard is committed to nobody, and this is the only place it
+                 * becomes attributable to a job at all.
+                 */
+                <div className="mt-4 border-t border-border pt-4">
+                  <Field label="Drawn from the stores">
+                    <span className="tabular">
+                      {formatCentsCompact(drawn.valueCents)}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-faint">
+                      Across {drawn.movements.length} movement
+                      {drawn.movements.length === 1 ? "" : "s"}, at average cost.
+                      Not added to committed — material bought on an order for
+                      this site is already counted there.
+                    </span>
+                  </Field>
+                </div>
+              )}
             </div>
           </Card>
 

@@ -4,7 +4,7 @@ import { withSession } from "@/lib/auth/session";
 import { formatCents, formatCentsExact, formatDate } from "@/lib/format";
 import { procurementService } from "@/modules/procurement/procurement.service";
 import { hrService } from "@/modules/hr/hr.service";
-import { describeQuantity } from "@/modules/procurement/matching";
+import { describeQuantity } from "@/lib/format";
 import {
   billingTone,
   BILLING_LABELS,

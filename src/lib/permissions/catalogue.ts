@@ -190,6 +190,52 @@ export const PERMISSIONS = {
   /// raising one.
   "procurement.invoice.approve": MODULES.PROCUREMENT,
 
+  /*
+   * Inventory.
+   *
+   * Split around one rule, the way procurement is split around the match:
+   * whoever moves stock is not whoever corrects the number.
+   *
+   * A storeman issues material all day and that is his job. If he can also
+   * write off the difference, the register agrees with the shelf every time he
+   * is asked and nothing he takes is ever visible — a stocktake that the person
+   * being checked can sign off checks nobody. So `stock.issue` is wide and
+   * held by everyone who runs a store, `stock.adjust` is narrow, and accepting
+   * a count's variance is narrower still.
+   *
+   * There is deliberately no `stock.receive`. Stock arrives by a delivery
+   * being signed for against a purchase order, which is already gated by
+   * `procurement.receipt.record`, and a second permission over the same act
+   * would only ever be the one somebody forgot to grant.
+   */
+  "inventory.item.view": MODULES.INVENTORY,
+  /// The register itself: what we hold, in what units, and at what level it
+  /// needs reordering.
+  "inventory.item.manage": MODULES.INVENTORY,
+  /// The stores. Rarer than managing items — a contractor opens a site store
+  /// when a job starts and not otherwise.
+  "inventory.location.manage": MODULES.INVENTORY,
+
+  /// What is on hand, and what it is worth. Separate from the catalogue,
+  /// because the valuation is a balance-sheet number and the catalogue is a
+  /// list of things.
+  "inventory.stock.view": MODULES.INVENTORY,
+  /// Issuing material out to a site or a person. The storeman's job.
+  "inventory.stock.issue": MODULES.INVENTORY,
+  /// Moving stock between our own stores. Nothing is consumed, so it is held
+  /// alongside issuing rather than with the corrections.
+  "inventory.stock.transfer": MODULES.INVENTORY,
+  /// Correcting the ledger, and writing stock off. The one that must not sit
+  /// in the same hands as issuing.
+  "inventory.stock.adjust": MODULES.INVENTORY,
+
+  "inventory.count.view": MODULES.INVENTORY,
+  /// Walking the racks and writing down what is there.
+  "inventory.count.record": MODULES.INVENTORY,
+  /// Accepting a count's variance into the ledger. This is the act that turns
+  /// a discrepancy into a write-off, so it is not the counter's to perform.
+  "inventory.count.approve": MODULES.INVENTORY,
+
   // Documents
   "documents.document.view": MODULES.DOCUMENTS,
   "documents.document.upload": MODULES.DOCUMENTS,
@@ -293,6 +339,14 @@ export const SYSTEM_ROLES: Record<
       "procurement.invoice.view",
       "procurement.invoice.record",
       "procurement.invoice.approve",
+      // Stock on hand is money sitting in a yard, so finance reads the
+      // valuation — and accepts the variance a stocktake turns up, which is
+      // the one decision in inventory that must not belong to the store.
+      "inventory.item.view",
+      "inventory.stock.view",
+      "inventory.stock.adjust",
+      "inventory.count.view",
+      "inventory.count.approve",
     ],
   },
   project_manager: {
@@ -346,6 +400,15 @@ export const SYSTEM_ROLES: Record<
       "procurement.order.submit",
       "procurement.receipt.record",
       "procurement.invoice.view",
+      // Draws material for their own site and counts the site store. Cannot
+      // adjust the ledger or accept a count — a site under budget pressure is
+      // exactly where a convenient write-off gets signed.
+      "inventory.item.view",
+      "inventory.stock.view",
+      "inventory.stock.issue",
+      "inventory.stock.transfer",
+      "inventory.count.view",
+      "inventory.count.record",
     ],
   },
   /**
@@ -375,6 +438,52 @@ export const SYSTEM_ROLES: Record<
       "projects.project.view",
       "documents.document.view",
       "documents.document.upload",
+      "reports.dashboard.view",
+      // Owns the stock register, because what to hold and when to reorder is a
+      // buying decision. Reads what is on hand for the same reason — the
+      // question "do we need to order more" cannot be answered without it.
+      "inventory.item.view",
+      "inventory.item.manage",
+      "inventory.stock.view",
+      "inventory.count.view",
+    ],
+  },
+  /**
+   * The store as its own role.
+   *
+   * Whoever runs a yard signs deliveries in and issues material out all day,
+   * and both of those are ordinary work. What they must not also hold is the
+   * ability to correct the number afterwards: a storeman who can issue stock
+   * and then write off the difference is checked by nobody, and the stocktake
+   * that would have found it is one he signs himself.
+   *
+   * That is the same shape as the buyer above — the role exists to keep two
+   * halves of one transaction apart, not because a job title needed a login.
+   */
+  storeman: {
+    name: "Storeman",
+    description:
+      "Receives deliveries, issues material and counts the store. Cannot correct the ledger.",
+    permissions: [
+      "inventory.item.view",
+      "inventory.stock.view",
+      "inventory.stock.issue",
+      "inventory.stock.transfer",
+      "inventory.count.view",
+      "inventory.count.record",
+      // Deliberately without `inventory.stock.adjust` and
+      // `inventory.count.approve`.
+      //
+      // Signing for a delivery, on the other hand, is the store's job and is
+      // how stock gets in at all. It comes with reading the order it arrived
+      // against, because a delivery note is checked against an order.
+      "procurement.order.view",
+      "procurement.receipt.record",
+      "procurement.supplier.view",
+      // Naming the person material was issued to, and the job it went to.
+      "hr.employee.view",
+      "projects.project.view",
+      "documents.document.view",
       "reports.dashboard.view",
     ],
   },

@@ -66,6 +66,15 @@ const TENDERS = { label: "Tenders", icon: "file" as const };
 const PEOPLE = { label: "People", icon: "userPlus" as const };
 const SAFETY = { label: "Health & safety", icon: "shield" as const };
 const BUYING = { label: "Buying", icon: "inbox" as const };
+/**
+ * Stock is its own branch rather than a child of Buying.
+ *
+ * They are next to each other in the sidebar and they are not the same job: a
+ * buyer places orders and a storeman signs for them and issues what is on the
+ * shelf. Folding one into the other would put the two halves of the separation
+ * the modules are built around under a single heading.
+ */
+const STORES = { label: "Stores & stock", icon: "grid" as const };
 
 const NAV: NavItem[] = [
   {
@@ -305,6 +314,42 @@ const NAV: NavItem[] = [
     permission: "procurement.invoice.view",
     group: "main",
     parent: BUYING,
+  },
+  {
+    href: "/inventory",
+    label: "Stock",
+    icon: "grid",
+    moduleKey: "inventory",
+    permission: "inventory.stock.view",
+    group: "main",
+    parent: STORES,
+  },
+  {
+    href: "/inventory/items",
+    label: "Stock register",
+    icon: "file",
+    moduleKey: "inventory",
+    permission: "inventory.item.view",
+    group: "main",
+    parent: STORES,
+  },
+  {
+    href: "/inventory/stores",
+    label: "Stores",
+    icon: "building",
+    moduleKey: "inventory",
+    permission: "inventory.stock.view",
+    group: "main",
+    parent: STORES,
+  },
+  {
+    href: "/inventory/counts",
+    label: "Stocktakes",
+    icon: "checkCircle",
+    moduleKey: "inventory",
+    permission: "inventory.count.view",
+    group: "main",
+    parent: STORES,
   },
   {
     href: "/reports",

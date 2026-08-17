@@ -71,6 +71,39 @@ that is quietly wrong is discovered in December.
 - Do they need timesheets, and do timesheets need to feed costing?
 - CIDB grading, retention, and progress claims — do these apply?
 
+## Blocking before anyone relies on the stock figures
+
+**Inventory is now built, so these have moved from "before we start" to "before
+anyone acts on the numbers".** The ledger is right about what it has been told;
+these decide whether it has been told the right things.
+
+- **What do they actually hold, and where?** The register is built for things
+  you count — cement, reinforcing, PPE, consumables. Ask for the current
+  spreadsheet or the yard's stock book. It is the best requirements document
+  available and it will contain items we have not thought of.
+- **How is material issued today** — a signed requisition slip, a WhatsApp to
+  the storeman, or nobody asks? We have deliberately not built a goods issue
+  note as a numbered document somebody signs, because we do not know whether
+  one exists. If it does, the ledger row is not enough and site disputes will
+  prove it.
+- **Do they count, and how often?** A month-end count of the main yard is
+  assumed. If they count quarterly, or never, the variance the module surfaces
+  will be enormous the first time and needs framing as a baseline rather than
+  as a loss.
+- **Who is allowed to write stock off, and at what value?** We have put it with
+  finance and kept it away from the store, which is the defensible default. It
+  is a real policy question and they may have an answer already.
+- **Is stock valued for the accounts?** If their accountant already carries a
+  stock figure, ours has to reconcile to it or one of the two is wrong in
+  public. Weighted average is what we have implemented; confirm it is what they
+  are on.
+- **Serial or batch tracking** — do they need to know which reinforcing came
+  off which mill certificate? Not built, and materially harder if the answer is
+  yes.
+- **Consignment stock**: does any supplier leave material on site that they
+  still own until it is used? It is on the yard and it is not ours, and the
+  register currently cannot say so.
+
 ## Blocking before Finance
 
 - Which accounting package, and does it have a usable API?

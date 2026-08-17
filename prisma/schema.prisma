@@ -360,6 +360,11 @@ model Organisation {
   goodsReceipts      GoodsReceipt[]
   goodsReceiptLines  GoodsReceiptLine[]
   supplierInvoices   SupplierInvoice[]
+  stockItems         StockItem[]
+  stockLocations     StockLocation[]
+  stockMovements     StockMovement[]
+  stockCounts        StockCount[]
+  stockCountLines    StockCountLine[]
 
   @@map("organisations")
 }
@@ -434,6 +439,8 @@ model User {
   completedActions      IncidentAction[]   @relation("IncidentActionCompleter")
   submittedOrders       PurchaseOrder[]    @relation("PurchaseOrderSubmitter")
   approvedOrders        PurchaseOrder[]    @relation("PurchaseOrderApprover")
+  submittedStockCounts  StockCount[]       @relation("StockCountSubmitter")
+  acceptedStockCounts   StockCount[]       @relation("StockCountAcceptor")
 
   @@unique([organisationId, email])
   @@index([organisationId])
@@ -863,6 +870,8 @@ model Project {
   timeEntries       TimeEntry[]
   incidents         Incident[]
   purchaseOrders    PurchaseOrder[]
+  stockLocations    StockLocation[]
+  stockIssues       StockMovement[]
 
   @@unique([organisationId, reference])
   @@index([organisationId])
@@ -1366,6 +1375,8 @@ model Employee {
   injuries           Incident[]          @relation("IncidentInjured")
   safetyActions      IncidentAction[]    @relation("IncidentActionOwner")
   goodsReceived      GoodsReceipt[]      @relation("GoodsReceiver")
+  stockIssuedTo      StockMovement[]     @relation("StockIssuedTo")
+  stockCounted       StockCount[]        @relation("StockCounter")
 
   @@unique([organisationId, employeeNumber])
   @@unique([userId])
@@ -2244,6 +2255,14 @@ model PurchaseOrderLine {
   /// hire is billed in days and readymix in cubic metres and nobody agrees.
   unit        String @default("each")
 
+  /// The item in the stock register this line buys, when it buys one.
+  ///
+  /// Optional and usually null. Plant hire, a subcontractor's labour and a
+  /// skip are all ordinary purchase order lines that never sit on a shelf, and
+  /// forcing every line to name a stock item would fill the register with
+  /// things nobody counts. Set it, and the delivery puts itself away.
+  stockItemId String? @db.Uuid
+
   /// Fractional on purpose: 12.5 m³ of concrete is an ordinary order, and an
   /// integer quantity would round it into a dispute.
   quantity       Decimal @db.Decimal(12, 3)
@@ -2260,8 +2279,10 @@ model PurchaseOrderLine {
 
   organisation  Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  stockItem     StockItem?    @relation(fields: [stockItemId], references: [id], onDelete: SetNull)
 
-  receiptLines GoodsReceiptLine[]
+  receiptLines   GoodsReceiptLine[]
+  stockMovements StockMovement[]
 
   @@unique([purchaseOrderId, lineNumber])
   @@index([organisationId])
@@ -2290,6 +2311,14 @@ model GoodsReceipt {
   receivedByEmployeeId String?  @db.Uuid
   note                 String?
 
+  /// Which store it was put away in.
+  ///
+  /// Null when the tenant does not run the inventory module, and null when the
+  /// load went straight off the truck onto the slab — which is most readymix
+  /// and most of the reinforcing on a busy site. A delivery that was never in
+  /// a store must not appear in one, so nothing is put away without this.
+  stockLocationId String? @db.Uuid
+
   recordStatus RecordStatus @default(ACTIVE)
   createdAt    DateTime     @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
@@ -2297,11 +2326,13 @@ model GoodsReceipt {
   updatedBy    String?      @db.Uuid
   deletedAt    DateTime?    @db.Timestamptz(6)
 
-  organisation       Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  purchaseOrder      PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  receivedByEmployee Employee?     @relation("GoodsReceiver", fields: [receivedByEmployeeId], references: [id], onDelete: SetNull)
+  organisation       Organisation   @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  purchaseOrder      PurchaseOrder  @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  receivedByEmployee Employee?      @relation("GoodsReceiver", fields: [receivedByEmployeeId], references: [id], onDelete: SetNull)
+  stockLocation      StockLocation? @relation(fields: [stockLocationId], references: [id], onDelete: SetNull)
 
-  lines GoodsReceiptLine[]
+  lines          GoodsReceiptLine[]
+  stockMovements StockMovement[]
 
   @@unique([organisationId, reference])
   @@index([organisationId])
@@ -2389,4 +2420,318 @@ model SupplierInvoice {
   @@index([organisationId, status])
   @@index([purchaseOrderId])
   @@map("supplier_invoices")
+}
+
+// ---------------------------------------------------------------------------
+// Inventory
+// ---------------------------------------------------------------------------
+
+/// Why stock moved. Which side of the movement carries a location says which
+/// way it went; this says what happened.
+///
+/// RECEIPT is the only kind that brings a price in with it — it comes off the
+/// purchase order line the goods were delivered against. Everything else is
+/// valued by replaying the ledger, which is why there is no cost column to
+/// disagree with.
+enum StockMovementKind {
+  /// Delivered against a purchase order and put away.
+  RECEIPT
+  /// Out to a site, a job or a person. This is the one that consumes stock.
+  ISSUE
+  /// Back from a site unused.
+  RETURN
+  /// Between two of our own stores. Nothing is consumed and nothing is bought.
+  TRANSFER
+  /// The ledger corrected to agree with the shelf, after a count.
+  ADJUSTMENT
+  /// Damaged, expired, or gone. Deliberately not an adjustment: writing stock
+  /// off is a decision somebody makes, and a correction is an arithmetic
+  /// disagreement. Filing the first as the second is how theft looks like
+  /// rounding.
+  WRITE_OFF
+}
+
+/// Where a stocktake has got to.
+enum StockCountStatus {
+  /// Being counted. Nothing has moved.
+  DRAFT
+  /// Counted and handed in. The variance is frozen and waiting for somebody
+  /// other than the counter to accept it.
+  COUNTED
+  /// Accepted. The adjustments are in the ledger and the count is history.
+  ACCEPTED
+  /// Given up on — a count nobody finished is worse than no count at all,
+  /// because a half-counted store reads as a store full of losses.
+  ABANDONED
+}
+
+/// Something we hold stock of.
+///
+/// Not everything bought is a stock item. Plant hire, a subcontractor's labour
+/// and a skip are all purchase order lines that never sit on a shelf, so the
+/// link from a purchase order line to an item is optional and most lines will
+/// not have one. The register is for the things that are counted.
+model StockItem {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  /// STK-2026-0001.
+  reference      String
+
+  /// The company's own code for it, as painted on the rack. Optional because
+  /// plenty of contractors do not have one, and inventing codes for them is a
+  /// week of work that buys nothing.
+  code        String?
+  name        String
+  description String?
+
+  /// How it is counted. The same free text a purchase order line uses — a bag
+  /// of cement is "bag" and readymix is "m³", and a fixed list drawn up now
+  /// would be wrong by the second item.
+  unit     String          @default("each")
+  category ExpenseCategory @default(MATERIALS)
+
+  /// Below this, somebody should be buying more. Null means nobody has said,
+  /// which is different from zero — zero is a deliberate "only order it when
+  /// a job needs it", and a null must never raise an alert nobody asked for.
+  reorderLevel    Decimal? @db.Decimal(12, 3)
+  /// How much to buy when it does run low, so the reorder list is an order
+  /// somebody can place rather than a list of names.
+  reorderQuantity Decimal? @db.Decimal(12, 3)
+
+  notes String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  movements  StockMovement[]
+  countLines StockCountLine[]
+  orderLines PurchaseOrderLine[]
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([organisationId, category])
+  @@map("stock_items")
+}
+
+/// Somewhere stock is kept.
+///
+/// The main yard, a container on a site, a lock-up at the office. A store on a
+/// site carries its project, which is what lets "what is left on the Mamelodi
+/// job" be a question with an answer when the job finishes.
+model StockLocation {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+
+  name      String
+  /// Set when the store belongs to a site. Null is the yard and the office.
+  projectId String? @db.Uuid
+  address   String?
+
+  /// Where a delivery lands when the person recording it does not say. Exactly
+  /// one per tenant is enforced in the service — two defaults is a coin toss
+  /// over where a load of cement went.
+  isDefault Boolean @default(false)
+
+  notes String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  movementsOut  StockMovement[] @relation("StockMovementFrom")
+  movementsIn   StockMovement[] @relation("StockMovementTo")
+  counts        StockCount[]
+  goodsReceipts GoodsReceipt[]
+
+  @@unique([organisationId, name])
+  @@index([organisationId])
+  @@index([projectId])
+  @@map("stock_locations")
+}
+
+/// One thing that happened to stock.
+///
+/// The ledger. Stock on hand is the sum of these and is never stored anywhere
+/// — the same decision the purchase order took about whether goods have
+/// arrived, and for the same reason: a stored quantity and a movements table
+/// disagree the first time somebody backdates a delivery, and then two screens
+/// give two answers about how much cement is in the yard.
+///
+/// Direction is carried by which side has a location rather than by a sign on
+/// the quantity. Stock coming in has a `to` and no `from`; stock going out has
+/// a `from` and no `to`; a transfer has both. Quantities are therefore always
+/// positive, and a negative quantity is a bug rather than a meaning.
+model StockMovement {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  stockItemId    String @db.Uuid
+
+  kind StockMovementKind
+
+  fromLocationId String? @db.Uuid
+  toLocationId   String? @db.Uuid
+
+  /// Always positive. Fractional for the same reason a purchase order line is:
+  /// 12.5 m³ of concrete is an ordinary delivery.
+  quantity Decimal @db.Decimal(12, 3)
+
+  /// What it came in at, on the movements that bring stock in and know the
+  /// price — which in practice means a receipt, off the order it was delivered
+  /// against. Null everywhere else, including on every issue: what stock
+  /// leaves at is the running weighted average, and the average is computed
+  /// from the ledger rather than written into it.
+  unitCostCents BigInt?
+
+  /// When it physically happened, which is not when somebody typed it in. A
+  /// delivery signed for on Friday and captured on Monday belongs on Friday,
+  /// or the Friday stock count is wrong forever.
+  movedAt DateTime @db.Timestamptz(6)
+
+  /// The delivery this came in on, when it came in on one.
+  goodsReceiptId      String? @db.Uuid
+  purchaseOrderLineId String? @db.Uuid
+  /// What it was used on. Held on the movement rather than inferred from the
+  /// store it left, because material is routinely drawn from the main yard
+  /// straight onto a job.
+  projectId           String? @db.Uuid
+  /// Who took it. An employee, not a user — the person carrying twenty bags
+  /// of cement out of the store very often has no login.
+  issuedToEmployeeId  String? @db.Uuid
+  /// The stocktake that produced this adjustment.
+  stockCountId        String? @db.Uuid
+
+  /// Why, in the words of whoever did it. Required by the service on the
+  /// movements where "why" is the whole point — a write-off and an adjustment.
+  reason String?
+  note   String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation      Organisation       @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  stockItem         StockItem          @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  fromLocation      StockLocation?     @relation("StockMovementFrom", fields: [fromLocationId], references: [id], onDelete: Restrict)
+  toLocation        StockLocation?     @relation("StockMovementTo", fields: [toLocationId], references: [id], onDelete: Restrict)
+  goodsReceipt      GoodsReceipt?      @relation(fields: [goodsReceiptId], references: [id], onDelete: SetNull)
+  purchaseOrderLine PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id], onDelete: SetNull)
+  project           Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  issuedToEmployee  Employee?          @relation("StockIssuedTo", fields: [issuedToEmployeeId], references: [id], onDelete: SetNull)
+  stockCount        StockCount?        @relation(fields: [stockCountId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId])
+  @@index([organisationId, stockItemId, movedAt])
+  @@index([fromLocationId])
+  @@index([toLocationId])
+  @@index([projectId])
+  @@map("stock_movements")
+}
+
+/// A stocktake: what was physically on the shelf, against what the ledger said.
+///
+/// The variance is the reason the module exists. A contractor who buys three
+/// hundred thousand rand of material a month and never counts it has no idea
+/// whether it went onto the job or into somebody's bakkie, and the difference
+/// between those two is the whole margin.
+model StockCount {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  /// SC-2026-0001.
+  reference      String
+
+  stockLocationId String   @db.Uuid
+  countedOn       DateTime @db.Timestamptz(6)
+
+  status StockCountStatus @default(DRAFT)
+
+  /// Who walked the racks. An employee, for the same reason a delivery is
+  /// signed for by one.
+  countedByEmployeeId String? @db.Uuid
+  /// Who handed it in, and who accepted the variance. Two different people,
+  /// enforced in the service.
+  submittedById       String? @db.Uuid
+  acceptedById        String? @db.Uuid
+
+  submittedAt     DateTime? @db.Timestamptz(6)
+  acceptedAt      DateTime? @db.Timestamptz(6)
+  abandonedReason String?
+
+  note String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation      Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  stockLocation     StockLocation @relation(fields: [stockLocationId], references: [id], onDelete: Restrict)
+  countedByEmployee Employee?     @relation("StockCounter", fields: [countedByEmployeeId], references: [id], onDelete: SetNull)
+  submittedBy       User?         @relation("StockCountSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
+  acceptedBy        User?         @relation("StockCountAcceptor", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  lines       StockCountLine[]
+  adjustments StockMovement[]
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([organisationId, status])
+  @@index([stockLocationId])
+  @@map("stock_counts")
+}
+
+/// One item on a stocktake.
+model StockCountLine {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  stockCountId   String @db.Uuid
+  stockItemId    String @db.Uuid
+
+  /// What was actually there.
+  countedQuantity  Decimal @db.Decimal(12, 3)
+  /// What the ledger said at the moment the count was handed in.
+  ///
+  /// Frozen rather than recomputed, and this is the important one. A variance
+  /// recomputed on the fly changes every time anything moves, so the figure a
+  /// manager accepted on Tuesday is not the figure the screen shows on
+  /// Thursday — and the adjustment that was posted no longer reconciles to
+  /// anything. Written once, when the count is submitted.
+  expectedQuantity Decimal @db.Decimal(12, 3)
+
+  note String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  stockCount   StockCount   @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  stockItem    StockItem    @relation(fields: [stockItemId], references: [id], onDelete: Restrict)
+
+  /// organisationId leads the key so the tenancy extension can pin the upsert
+  /// a count uses to one tenant. Without it the guard refuses the write, which
+  /// is the extension doing its job rather than being awkward.
+  @@unique([organisationId, stockCountId, stockItemId])
+  @@index([organisationId])
+  @@index([stockCountId])
+  @@map("stock_count_lines")
 }

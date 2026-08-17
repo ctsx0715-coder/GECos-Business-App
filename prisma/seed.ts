@@ -10,6 +10,7 @@ import {
 import { DEFAULT_TENDER_CHECKLIST } from "@/modules/tenders/tender.service";
 import { seedHrDemo } from "./hr-demo";
 import { seedHseDemo } from "./hse-demo";
+import { seedInventoryDemo } from "./inventory-demo";
 import { seedProcurementDemo } from "./procurement-demo";
 import type { TenderStatus } from "@/generated/prisma/client";
 
@@ -70,6 +71,7 @@ async function seedTenant(params: {
             MODULES.HR,
             MODULES.HSE,
             MODULES.PROCUREMENT,
+            MODULES.INVENTORY,
           ].includes(moduleKey as never),
         },
       });
@@ -185,6 +187,13 @@ async function main() {
       { roleKey: "employee", firstName: "Anele", lastName: "Dlamini", jobTitle: "Site Supervisor" },
       { roleKey: "hr_manager", firstName: "Refilwe", lastName: "Molefe", jobTitle: "HR Manager" },
       { roleKey: "safety_officer", firstName: "Mandla", lastName: "Ngcobo", jobTitle: "Safety Officer" },
+      // Buying and the store, as two people. They are the two halves of the
+      // separation procurement and inventory are built around, and a demo
+      // signed in as one person who can do both shows none of it. The same
+      // two names the backfill scripts create, so a database built either way
+      // has the same staff.
+      { roleKey: "buyer", firstName: "Naledi", lastName: "Dlamini", jobTitle: "Buyer" },
+      { roleKey: "storeman", firstName: "Thabo", lastName: "Maseko", jobTitle: "Storeman" },
     ],
   });
 
@@ -791,9 +800,19 @@ async function main() {
     });
 
     // ---- Procurement --------------------------------------------------------
-    // Last, and for two reasons: deliveries are signed for by employees looked
-    // up by name, and the orders are raised against the sites above.
+    // For two reasons: deliveries are signed for by employees looked up by
+    // name, and the orders are raised against the sites above.
     await seedProcurementDemo({
+      organisationId: nopedi.organisation.id,
+      userIds: nopedi.userIds,
+    });
+
+    // ---- Inventory ----------------------------------------------------------
+    // Last, and it has to be. It points the purchase order lines above at the
+    // stock register and puts their deliveries away, which is the hand-off the
+    // module is arranged around and cannot be shown against orders that do not
+    // exist yet.
+    await seedInventoryDemo({
       organisationId: nopedi.organisation.id,
       userIds: nopedi.userIds,
     });

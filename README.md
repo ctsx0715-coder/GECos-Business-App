@@ -3,10 +3,10 @@
 A centralised platform for managing people, customers, projects, tenders,
 procurement, assets, compliance and financial operations from one system.
 
-Past the walking skeleton. Tenders, CRM, Projects, HR and Health & Safety are
-built, with record-level reporting and a design system across all of them. Five
-Stage 1 acceptance criteria remain open, every one blocked on an external
-account rather than a decision — see
+Past the walking skeleton. Tenders, CRM, Projects, HR, Health & Safety,
+Procurement and Inventory are built, with record-level reporting and a design
+system across all of them. Five Stage 1 acceptance criteria remain open, every
+one blocked on an external account rather than a decision — see
 [`docs/01-demo-scope.md`](docs/01-demo-scope.md).
 
 ## Documentation
@@ -31,7 +31,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 749 tests against a real database
+pnpm test                   # 834 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -52,12 +52,14 @@ in `src/generated/prisma` and is not committed.
 | `pnpm hr:backfill` | Add the HR demo dataset to a database that already has data — additive, idempotent |
 | `pnpm hse:backfill` | The same for the incident register. Run it after `hr:backfill` — incidents are attributed to employees by name |
 | `pnpm procurement:backfill` | The same for suppliers and purchase orders. Also after `hr:backfill` — deliveries are signed for by employees by name |
+| `pnpm inventory:backfill` | The same for stores, stock and stocktakes. Run it after `procurement:backfill` — it points existing order lines at the register and puts their deliveries away |
 | `pnpm hr:accrue` | Credit leave balances with what they have earned. Runs monthly from Actions |
 | `pnpm hr:rotate` | Move people onto turns that start today. Runs every morning from Actions |
 | `pnpm db:studio` | Browse the database |
 | `pnpm screenshots:lifecycle` | Drives the lifecycle preview and reporting screens, asserting on each |
 | `pnpm screenshots:hse` | Drives the safety screens, asserting the statutory deadlines and the closing rule |
 | `pnpm screenshots:procurement` | Drives the procurement screens, asserting the match and who may do what |
+| `pnpm screenshots:inventory` | Drives the stock screens, asserting the impossible balance shows and that the storeman cannot correct it |
 
 `db:sync` runs automatically on every **production** deploy and is safe to
 repeat: it only adds, leaves an unimplemented module switched off, and never
@@ -600,6 +602,154 @@ on the record, and the screen says what does not balance on the way out.
 Not yet handled: credit notes as their own record, blanket orders called off
 over a period, and invoices spanning more than one order. All three are real
 and none of them are here.
+
+## Stock
+
+What is on hand is never stored. It is the sum of the movements every time it
+is asked — the same decision the purchase order took about whether goods have
+arrived, taken here for the same reason. A stored quantity and a movements
+table disagree the first time somebody backdates a delivery signed for on
+Friday and captured on Monday, and from then on two screens give two answers
+about how much cement is in the yard.
+
+The arithmetic is in `src/modules/inventory/stock-ledger.ts`, with no database
+in it, and `stock-ledger.test.ts` drives it through the cases a storeman
+actually hits.
+
+### Direction is which side has a store
+
+A movement has a `from` and a `to`, and the quantity is always positive. Stock
+coming in has a `to` and no `from`; stock going out has a `from` and no `to`; a
+transfer has both. The alternative — a signed quantity — makes "issue minus
+three bags" a sentence the type system is happy with.
+
+`kind` then says *why*: delivered, issued, returned, transferred, corrected,
+written off. A write-off is deliberately not an adjustment. Writing stock off
+is a decision somebody makes; a correction is an arithmetic disagreement, and
+filing the first as the second is how theft looks like rounding.
+
+### A balance may go below zero
+
+Forty bags leave a store the ledger says holds thirty. The temptation is to
+refuse the issue — but the forty bags are leaving whatever the software says,
+and a storeman who is told "no" simply does not record it. The ledger is then
+wrong *and* nobody knows it is wrong, which is strictly worse than a negative
+balance that says out loud that a delivery was never captured.
+
+So it goes through, and the arithmetic is not clamped at zero. Clamping throws
+away the evidence, and worse: when the missing delivery is finally entered, a
+clamped balance jumps to the full delivered quantity instead of settling at the
+true remainder, so the error survives the correction. Left alone it comes right
+on its own.
+
+The register also remembers a balance that went below zero *earlier* and has
+since come right, because that is invisible from today's figure and still means
+one of two things — a delivery is missing, or one was dated the day it was
+typed rather than the day it arrived. A delivery captured late but dated
+correctly clears the flag, and should: nothing impossible happened.
+
+### Valuation is weighted average
+
+Not FIFO. FIFO needs every issue to name the delivery it came out of, and no
+storeman handing over twenty bags of cement knows or cares which pallet they
+were on. Weighted average is what a contractor's accountant expects and the
+only method the source data supports.
+
+Movements are replayed in the order they *happened* rather than the order they
+were captured, because the average is path dependent: material issued before a
+price rise left at the old average, and a delivery entered late must not
+retrospectively make it more expensive.
+
+Two prices carry no cost of their own. A return comes back at the last price we
+knew — the material is coming from a site that took it at whatever the average
+was then, and valuing it at zero writes it off on the way in. And once a
+balance is at or below zero there is nothing to divide by, so what leaves is
+valued at that same last known price.
+
+### A delivery puts itself away
+
+A purchase order line may name a stock item. Most will not — plant hire, a
+subcontractor's labour and a skip are ordinary order lines that never sit on a
+shelf. Where one does, signing for the delivery moves the goods into the store
+named on the receipt, at the price on the order.
+
+That price is the point. The value of a yard is then the sum of what was
+actually paid for it, and there is nowhere for anybody to type a different
+number. Nothing is put away unless the receipt names a store, which covers both
+the tenant who does not run this module and the load that went straight off the
+truck onto the slab — most readymix, and most of the reinforcing on a busy
+site. A delivery that was never in a store must not appear in one.
+
+### Whoever moves stock does not correct it
+
+The rule the module is arranged around, and the same shape as the three-way
+match. A storeman issues material all day and that is his job. If he can also
+write off the difference, the ledger agrees with the shelf every time anybody
+asks and nothing he takes is ever visible.
+
+So `inventory.stock.issue` is wide and held by everyone who runs a store;
+`inventory.stock.adjust` is narrow; and accepting a stocktake's variance is
+narrower still. There is deliberately no `inventory.stock.receive` — stock
+arrives by a delivery being signed for, which `procurement.receipt.record`
+already gates, and a second permission over the same act would only ever be the
+one somebody forgot to grant.
+
+| Role | Issues and transfers | Counts a store | Corrects the ledger | Accepts a count |
+|---|---|---|---|---|
+| Storeman | yes | yes | **no** | **no** |
+| Project Manager | yes | yes | **no** | **no** |
+| Buyer | **no** | **no** | **no** | **no** |
+| Finance Manager | **no** | **no** | yes | yes |
+
+### Stocktakes
+
+A count is the reason the module earns its keep. A contractor who buys three
+hundred thousand rand of material a month and never counts it has no idea
+whether it went onto the job or into somebody's bakkie, and the difference is
+the whole margin.
+
+The screen has two faces. While it is being counted it is a list of items and
+an empty box next to each, and it deliberately does not show what the ledger
+expects — a counter who can see the figure they are supposed to reach will
+reach it, not dishonestly, but because forty-two bags against "it says forty"
+is a recount, and the recount always finds forty.
+
+Handing it in freezes every line's expected quantity. A variance recomputed on
+the fly changes every time anything is issued, so the shortfall a manager
+accepted on Tuesday is not the one the screen shows on Thursday — and the
+adjustment posted against it no longer reconciles to anything.
+
+The shortfall and the surplus are then reported apart rather than netted. A
+count four thousand rand short on cement and four thousand over on sand has a
+net of zero and two serious problems.
+
+Accepting it writes one movement per line that disagrees, and none for the
+lines that agree — a movement of zero is not an event, and a ledger full of
+them buries the ones that matter. It cannot be accepted by whoever counted it
+or handed it in, and a shortfall cannot be absorbed without a reason: material
+worth thousands of rand does not evaporate.
+
+### What a site has drawn
+
+Stock issued to a project is shown on the project page and is deliberately
+**not** added to its budget.
+
+The budget already counts an approved purchase order as committed. Most
+material a site draws was bought on an order that named the site, so adding the
+issue on top counts the same cement twice — once when it was ordered and again
+when it was carried out of the store. That figure is not conservative, it is
+wrong, and a project manager told they are R400 000 over on a job that is fine
+stops reading the number.
+
+It is still worth showing, because material bought for the yard is committed to
+nobody, and this is the only place it becomes attributable to a job at all. So
+it sits next to the budget with the double-count said out loud, rather than
+folded into a total that cannot tell the two cases apart.
+
+Not yet handled: a goods issue note as a numbered document somebody signs,
+serial and batch tracking, minimum stock per store rather than per item, and
+consignment stock a supplier still owns. All four are real and none of them are
+here.
 
 ## Approvals
 

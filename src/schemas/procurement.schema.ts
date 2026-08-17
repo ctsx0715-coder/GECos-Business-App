@@ -79,6 +79,11 @@ export const orderLineSchema = z.object({
   quantity,
   unitPriceRands: rands,
   category: z.enum(EXPENSE_CATEGORIES).default("MATERIALS"),
+  /// The item in the stock register this line buys, when it buys one. Naming
+  /// it is what lets the delivery put itself away; leaving it out is right for
+  /// plant hire, a subcontractor's labour and everything else that never sits
+  /// on a shelf.
+  stockItemId: z.uuid().nullish(),
 });
 
 export const createOrderSchema = z.object({
@@ -142,6 +147,10 @@ export const recordReceiptSchema = z
     deliveryNoteNumber: z.string().trim().max(60).optional(),
     receivedByEmployeeId: z.uuid().optional(),
     note: z.string().trim().max(1000).optional(),
+    /// Which store it was put away in. Left out when the load went straight
+    /// off the truck onto the slab, which is most readymix — a delivery that
+    /// was never in a store must not appear in one.
+    stockLocationId: z.uuid().nullish(),
     lines: z.array(receiptLineSchema).min(1, "Say what arrived."),
   })
   .refine((data) => data.receivedAt <= new Date(), {

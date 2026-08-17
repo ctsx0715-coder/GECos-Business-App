@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TOLERANCE,
   concerns,
-  describeQuantity,
   lineValueCents,
   matchLine,
   matchOrder,
@@ -11,6 +10,7 @@ import {
   type OrderedLine,
   type ReceivedAgainstLine,
 } from "./matching";
+import { describeQuantity } from "@/lib/format";
 
 /**
  * The cases worth testing are the ones that cost money, not the ones where

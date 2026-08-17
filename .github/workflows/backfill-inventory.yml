@@ -1,0 +1,83 @@
+name: Backfill inventory demo data
+
+# Manually triggered, and additive.
+#
+# Same reasoning as the HR, safety and procurement backfills: the seed
+# truncates every table before it writes, which is correct for a fresh database
+# and ruinous for this one. This adds the stores, the stock register, the
+# ledger and two stocktakes, and destroys nothing.
+#
+# Run the procurement backfill first. This one points the purchase order lines
+# it created at the stock register and puts their deliveries away, which is the
+# hand-off the module is arranged around and cannot be shown against orders
+# that are not there.
+#
+# Safe to run twice — it adds only what is missing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type ADD to confirm — this writes demo stock, movements and a Storeman login'
+        required: true
+        default: ''
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the confirmation
+        if: inputs.confirm != 'ADD'
+        run: |
+          echo "::error::Confirmation failed. Type ADD exactly to run this."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The stock tables have to exist before anything can be written into
+      # them. Deploys apply migrations too; this is here so the order cannot be
+      # got wrong by running the two in the wrong sequence.
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm prisma migrate deploy
+
+      # The Storeman role has to exist before a login can be given it, and
+      # db:sync is what writes the system roles. It also switches the inventory
+      # module on for the tenant. VERCEL_ENV is unset here, which the database
+      # guard reads as "not a Vercel build" and allows — the rule it enforces
+      # is about preview deploys, not about this.
+      - name: Sync roles, permissions and modules
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm db:sync
+
+      - name: Backfill
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NOPEDI_DEMO_DATA: 'true'
+        run: pnpm inventory:backfill
+
+      - name: Summary
+        run: |
+          echo "### Inventory data added" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Reload the deployment — no redeploy needed." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Sign in as Thabo Maseko (Storeman) to issue material and" >> $GITHUB_STEP_SUMMARY
+          echo "count a store. He deliberately cannot write stock off or" >> $GITHUB_STEP_SUMMARY
+          echo "accept his own count — sign in as Lerato Mokoena (Finance" >> $GITHUB_STEP_SUMMARY
+          echo "Manager) for both." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The hard hats are the one to look at: the ledger says less" >> $GITHUB_STEP_SUMMARY
+          echo "than nothing, which means a delivery was never recorded." >> $GITHUB_STEP_SUMMARY

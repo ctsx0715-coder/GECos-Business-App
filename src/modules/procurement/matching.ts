@@ -22,7 +22,7 @@
  * end, because the per-line figure is what somebody checks against the paper.
  */
 
-import { formatCentsExact } from "@/lib/format";
+import { describeQuantity, formatCentsExact } from "@/lib/format";
 
 /** Below this, two quantities are the same quantity. Three decimals stored. */
 const EPSILON = 0.0005;
@@ -278,43 +278,4 @@ export function concerns(match: OrderMatch): string[] {
   }
 
   return found;
-}
-
-/**
- * Units that never take an s.
- *
- * Two kinds, kept in one set because the rule about them is the same. Symbols
- * — kg, m, t — are alphabetic but are not words, and "40 kgs" is wrong in a
- * way a supplier would notice. And the uncountables: "each" is the default
- * unit, so it is the one a naive rule would get wrong most often.
- */
-const NEVER_PLURAL = new Set([
-  "kg", "g", "t", "mg",
-  "m", "mm", "cm", "km",
-  "l", "ml", "kl",
-  "each", "lot", "set", "sum", "no",
-]);
-
-/**
- * A quantity with its unit, as somebody would write it on a purchase order.
- *
- * Two things happen here. Trailing zeroes come off the stored Decimal(12,3),
- * so it reads "12.5 m³" rather than "12.500 m³". And a unit that is an
- * ordinary English word is pluralised, because "14 day of compactor hire" is
- * how a machine writes and not how a buyer does.
- *
- * The unit is free text — a pattern says which days, a unit says how it is
- * billed, and plant hire is in days while readymix is in cubic metres — so
- * this cannot be a lookup table. It pluralises words and leaves everything
- * else exactly as it was typed, which is the safe direction to be wrong in.
- */
-export function describeQuantity(quantity: number, unit: string): string {
-  const rounded = Math.round(quantity * 1000) / 1000;
-
-  const pluralise =
-    rounded !== 1 &&
-    /^[a-z]+$/i.test(unit) &&
-    !NEVER_PLURAL.has(unit.toLowerCase());
-
-  return `${rounded} ${pluralise ? `${unit}s` : unit}`;
 }

@@ -23,10 +23,12 @@
     "screenshots:lifecycle": "tsx scripts/screenshots-lifecycle.ts",
     "screenshots:hse": "tsx scripts/screenshots-hse.ts",
     "screenshots:procurement": "tsx scripts/screenshots-procurement.ts",
+    "screenshots:inventory": "tsx scripts/screenshots-inventory.ts",
     "db:sync": "tsx scripts/sync-config.ts",
     "hr:backfill": "tsx scripts/backfill-hr.ts",
     "hse:backfill": "tsx scripts/backfill-hse.ts",
     "procurement:backfill": "tsx scripts/backfill-procurement.ts",
+    "inventory:backfill": "tsx scripts/backfill-inventory.ts",
     "hr:accrue": "tsx scripts/run-accrual.ts",
     "hr:rotate": "tsx scripts/apply-rotations.ts"
   },

@@ -11,6 +11,11 @@
 
 /** Models carrying an `organisationId` that the extension must scope. */
 export const TENANT_SCOPED_MODELS = new Set<string>([
+  "StockItem",
+  "StockLocation",
+  "StockMovement",
+  "StockCount",
+  "StockCountLine",
   "Supplier",
   "PurchaseOrder",
   "PurchaseOrderLine",
@@ -71,6 +76,11 @@ export const UNSCOPED_MODELS = new Map<string, string>([
 
 /** Models with `deletedAt`, where delete becomes an update (ADR-007). */
 export const SOFT_DELETE_MODELS = new Set<string>([
+  "StockItem",
+  "StockLocation",
+  "StockMovement",
+  "StockCount",
+  "StockCountLine",
   "Supplier",
   "PurchaseOrder",
   "PurchaseOrderLine",
@@ -115,6 +125,11 @@ export const SOFT_DELETE_MODELS = new Set<string>([
 
 /** Models with a `recordStatus` column to keep in step with `deletedAt`. */
 export const RECORD_STATUS_MODELS = new Set<string>([
+  "StockItem",
+  "StockLocation",
+  "StockMovement",
+  "StockCount",
+  "StockCountLine",
   "Supplier",
   "PurchaseOrder",
   "PurchaseOrderLine",
@@ -154,6 +169,11 @@ export const RECORD_STATUS_MODELS = new Set<string>([
 
 /** Models carrying `createdBy` / `updatedBy` for the extension to stamp. */
 export const ACTOR_STAMPED_MODELS = new Set<string>([
+  "StockItem",
+  "StockLocation",
+  "StockMovement",
+  "StockCount",
+  "StockCountLine",
   "Supplier",
   "PurchaseOrder",
   "PurchaseOrderLine",

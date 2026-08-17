@@ -98,9 +98,13 @@ Procurement, Inventory, Assets, Finance, tender pricing
 build-up, proposal document generation, configurable dashboards, report builder,
 exports, SMS or WhatsApp channels, bulk import, and search.
 
-CRM and Projects were on this list and have since been built — see "Beyond
-the skeleton" below. Both were cut from the skeleton deliberately and added
-only once its acceptance criteria held.
+CRM, Projects, Procurement and Inventory were on this list and have since been
+built — see "Beyond the skeleton" below. All four were cut from the skeleton
+deliberately and added only once its acceptance criteria held. Assets and
+Finance remain unbuilt, and Finance is the one still genuinely blocked: the
+questions under "Blocking before Finance" in
+[`02-discovery-questions.md`](02-discovery-questions.md) decide the module's
+shape rather than its details.
 
 ## Two stages
 
@@ -206,6 +210,49 @@ does not have to.
 That is the claim the walking skeleton was built to test, now with evidence
 from four modules: each one after the first is CRUD on proven rails, plus
 whatever the subject itself genuinely requires.
+
+**Procurement followed**, and **Inventory after it** — the first module the
+order named in "Explicitly not in the skeleton" above as Phase 2+, and the
+first one chosen because an earlier module had left something unfinished
+rather than because it was next on a list. Procurement's goods receipt recorded
+that something arrived and then forgot it: a delivery note with nowhere to
+land. Stock is where it lands.
+
+Two things about it are worth recording, and they pull in opposite directions.
+
+The rails held again, and further than before. Five models registered in
+`model-metadata.ts`, one service, one repository, no platform change of any
+kind — and this is the first module to reach into another one, which was the
+obvious place for the foundation to leak. It did not: putting a delivery away
+is one call from the procurement service to the inventory service, and it
+needed nothing from the extension, the audit trail or the permission mechanism
+that was not already there.
+
+What it did need, again, was subject-matter code. Weighted average cost
+replayed over a ledger is not CRUD, and neither is the decision about what
+happens when a store issues more than it holds. That decision is the module's
+whole character and it went the way the rails would not have chosen: **the
+issue is allowed through and the balance is allowed below zero**, because
+refusing it means the storeman records nothing at all and the ledger is then
+wrong with nobody knowing. A framework has no opinion about that. A contractor
+does.
+
+The one genuinely new shape is a rule about *people* rather than about data.
+Procurement's three-way match keeps three documents in three hands; inventory
+keeps two acts in two hands — whoever moves stock does not correct it, and a
+stocktake cannot be signed off by whoever counted it. It is the same idea
+applied to a different pair, which is some evidence that the pattern is the
+platform's rather than procurement's.
+
+The double-count is the other thing worth recording, because it was the first
+real disagreement between two modules. A project's budget already counts an
+approved purchase order as committed, and most material a site draws was bought
+on an order that named that site. Adding the value of the issue on top counts
+the same cement twice. The resolution was to show it next to the budget rather
+than inside it, with the reason on the screen — which is unsatisfying, and is
+honest. Attributing it properly needs the ledger to trace each issue back to
+the order that bought it, and that is a bigger piece of work than this module
+was scoped for.
 
 ## The input layer
 

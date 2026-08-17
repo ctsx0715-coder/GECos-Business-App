@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { describeQuantity } from "@/modules/procurement/matching";
+import { describeQuantity } from "@/lib/format";
 import { Card, CardHeader, Icon } from "@/components/ui";
 import { useFormAction } from "@/components/forms";
 import {

@@ -28,6 +28,7 @@ import type {
   PurchaseOrderStatus,
   SupplierStatus,
 } from "@/generated/prisma/client";
+import { inventoryService } from "@/modules/inventory/inventory.service";
 import { procurementRepository } from "./procurement.repository";
 import {
   concerns,
@@ -258,6 +259,7 @@ export const procurementService = {
         quantity: line.quantity,
         unitPriceCents: toCents(line.unitPriceRands),
         category: line.category,
+        stockItemId: line.stockItemId ?? null,
       });
     }
 
@@ -293,6 +295,7 @@ export const procurementService = {
       quantity: data.quantity,
       unitPriceCents: toCents(data.unitPriceRands),
       category: data.category,
+      stockItemId: data.stockItemId ?? null,
     });
   },
 
@@ -521,6 +524,7 @@ export const procurementService = {
       deliveryNoteNumber: data.deliveryNoteNumber,
       receivedByEmployeeId: data.receivedByEmployeeId,
       note: data.note,
+      stockLocationId: data.stockLocationId ?? null,
     });
 
     for (const line of data.lines) {
@@ -533,6 +537,20 @@ export const procurementService = {
         rejectedReason: line.rejectedReason,
       });
     }
+
+    /*
+     * Put it away.
+     *
+     * The one place procurement reaches into another module, and it is here
+     * rather than in a screen because signing for a delivery and the stock
+     * appearing in the yard are the same event. A storeman who has to record
+     * it twice will one day record it once, and the second module is the one
+     * that gets missed.
+     *
+     * It costs nothing when the tenant does not run inventory: with no stores
+     * there is no store to name, and the receipt carries no location.
+     */
+    await inventoryService.putAwayReceipt(receipt.id);
 
     return procurementRepository.findOrder(order.id);
   },
