@@ -48,6 +48,7 @@ enum EntityType {
   EXPENSE
   LEAVE_REQUEST
   INCIDENT
+  PURCHASE_ORDER
 }
 
 enum TenderStatus {
@@ -353,6 +354,12 @@ model Organisation {
   payrollPolicy      PayrollPolicy?
   incidents          Incident[]
   incidentActions    IncidentAction[]
+  suppliers          Supplier[]
+  purchaseOrders     PurchaseOrder[]
+  purchaseOrderLines PurchaseOrderLine[]
+  goodsReceipts      GoodsReceipt[]
+  goodsReceiptLines  GoodsReceiptLine[]
+  supplierInvoices   SupplierInvoice[]
 
   @@map("organisations")
 }
@@ -425,6 +432,8 @@ model User {
   investigatedIncidents Incident[]         @relation("IncidentInvestigator")
   closedIncidents       Incident[]         @relation("IncidentCloser")
   completedActions      IncidentAction[]   @relation("IncidentActionCompleter")
+  submittedOrders       PurchaseOrder[]    @relation("PurchaseOrderSubmitter")
+  approvedOrders        PurchaseOrder[]    @relation("PurchaseOrderApprover")
 
   @@unique([organisationId, email])
   @@index([organisationId])
@@ -853,6 +862,7 @@ model Project {
   staffingRules     StaffingRule[]
   timeEntries       TimeEntry[]
   incidents         Incident[]
+  purchaseOrders    PurchaseOrder[]
 
   @@unique([organisationId, reference])
   @@index([organisationId])
@@ -1355,6 +1365,7 @@ model Employee {
   timeEntries        TimeEntry[]
   injuries           Incident[]          @relation("IncidentInjured")
   safetyActions      IncidentAction[]    @relation("IncidentActionOwner")
+  goodsReceived      GoodsReceipt[]      @relation("GoodsReceiver")
 
   @@unique([organisationId, employeeNumber])
   @@unique([userId])
@@ -2063,4 +2074,319 @@ model IncidentAction {
   @@index([incidentId])
   @@index([organisationId, dueAt])
   @@map("incident_actions")
+}
+
+// ---------------------------------------------------------------------------
+// Procurement
+// ---------------------------------------------------------------------------
+
+/// Whether we are allowed to buy from them yet.
+///
+/// A register everybody can add to and nobody vets is how a company ends up
+/// paying a supplier whose tax clearance lapsed two years ago — which on a
+/// public-sector contract is the client's problem and therefore ours.
+enum SupplierStatus {
+  PENDING
+  APPROVED
+  SUSPENDED
+}
+
+/// The authorisation lifecycle of an order, and nothing else.
+///
+/// Deliberately says nothing about whether the goods have arrived. That is
+/// derived from the receipts every time it is asked, because a stored
+/// "received" flag and a receipts table disagree the first time somebody
+/// records a late delivery, and then two screens give two answers.
+///
+/// DRAFT is the requisition. For a company of this size the order a site wants
+/// and the request for it are the same piece of paper, and a separate
+/// requisition table would be a second form to fill in that says the same
+/// things. It becomes a commitment at APPROVED, not before.
+enum PurchaseOrderStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CANCELLED
+  CLOSED
+}
+
+/// Where a supplier's invoice has got to.
+enum SupplierInvoiceStatus {
+  RECEIVED
+  APPROVED
+  DISPUTED
+  PAID
+}
+
+/// Somebody we buy from.
+model Supplier {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  /// SUP-2026-0001.
+  reference      String
+
+  name               String
+  tradingName        String?
+  registrationNumber String?
+  vatNumber          String?
+
+  contactName String?
+  email       String?
+  phone       String?
+  address     String?
+
+  status SupplierStatus @default(PENDING)
+
+  /// 1 to 8, or null when they have not given us a certificate.
+  ///
+  /// Held because preferential procurement is scored on the spend a contractor
+  /// puts through B-BBEE compliant suppliers, and a tender asks for that split
+  /// after the fact. Recording it at the supplier is the only way to answer
+  /// without going through a year of invoices by hand.
+  bbbeeLevel            Int?
+  /// A supplier with no valid tax clearance is a problem you inherit.
+  taxClearanceExpiresAt DateTime? @db.Timestamptz(6)
+
+  /// What they supply, in the words the buyer uses — "readymix", "scaffolding
+  /// hire", "PPE". Free text rather than an enum: a category list drawn up now
+  /// would be wrong by the second supplier.
+  supplies String[]
+
+  notes String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  purchaseOrders PurchaseOrder[]
+  invoices       SupplierInvoice[]
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([organisationId, status])
+  @@map("suppliers")
+}
+
+/// What we have asked a supplier for, and once approved, committed to paying.
+model PurchaseOrder {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  /// PO-2026-0001. Quoted on the supplier's delivery note and their invoice,
+  /// which is the whole reason a purchase order has a number.
+  reference      String
+
+  supplierId String  @db.Uuid
+  /// The site it is for. Null for the yard and the office, which are not
+  /// projects — and a purchase with no project is exactly the one nobody
+  /// notices, so it is allowed but never silent.
+  projectId  String? @db.Uuid
+
+  status PurchaseOrderStatus @default(DRAFT)
+
+  /// Free text, because it is read by a driver looking for a gate.
+  deliverTo  String?
+  requiredBy DateTime? @db.Timestamptz(6)
+  currency   String    @default("ZAR")
+  notes      String?
+
+  submittedById  String?   @db.Uuid
+  approvedById   String?   @db.Uuid
+  approvedAt     DateTime? @db.Timestamptz(6)
+  rejectedReason String?
+  cancelledAt    DateTime? @db.Timestamptz(6)
+  closedAt       DateTime? @db.Timestamptz(6)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  supplier     Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  submittedBy  User?        @relation("PurchaseOrderSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
+  approvedBy   User?        @relation("PurchaseOrderApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  lines    PurchaseOrderLine[]
+  receipts GoodsReceipt[]
+  invoices SupplierInvoice[]
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([organisationId, status])
+  @@index([supplierId])
+  @@index([projectId, status])
+  @@map("purchase_orders")
+}
+
+/// One thing being bought, at a price.
+///
+/// The order's total is the sum of these and is never stored. A stored total
+/// is a second copy of a number that can be edited, and the first line change
+/// that forgets to update it is undetectable.
+model PurchaseOrderLine {
+  id              String @id @default(uuid()) @db.Uuid
+  organisationId  String @db.Uuid
+  purchaseOrderId String @db.Uuid
+
+  /// The number the supplier will quote back on a query. Stable once written.
+  lineNumber  Int
+  description String
+  /// "each", "m³", "tonne", "day". A word rather than an enum, because plant
+  /// hire is billed in days and readymix in cubic metres and nobody agrees.
+  unit        String @default("each")
+
+  /// Fractional on purpose: 12.5 m³ of concrete is an ordinary order, and an
+  /// integer quantity would round it into a dispute.
+  quantity       Decimal @db.Decimal(12, 3)
+  unitPriceCents BigInt
+
+  category ExpenseCategory @default(MATERIALS)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation  Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  receiptLines GoodsReceiptLine[]
+
+  @@unique([purchaseOrderId, lineNumber])
+  @@index([organisationId])
+  @@index([purchaseOrderId])
+  @@map("purchase_order_lines")
+}
+
+/// What actually turned up.
+///
+/// A separate record per delivery rather than a quantity on the line, because
+/// partial delivery is the normal case on a construction site: half the
+/// reinforcing arrives on Tuesday and the rest the following week, and both
+/// need their own date and their own delivery note number.
+model GoodsReceipt {
+  id              String @id @default(uuid()) @db.Uuid
+  organisationId  String @db.Uuid
+  /// GRN-2026-0001.
+  reference       String
+  purchaseOrderId String @db.Uuid
+
+  receivedAt           DateTime @db.Timestamptz(6)
+  /// Theirs, off the paper the driver hands over.
+  deliveryNoteNumber   String?
+  /// Who took delivery. An employee, not a user: the storeman signing for a
+  /// load of cement very often has no login.
+  receivedByEmployeeId String?  @db.Uuid
+  note                 String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation       Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  purchaseOrder      PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  receivedByEmployee Employee?     @relation("GoodsReceiver", fields: [receivedByEmployeeId], references: [id], onDelete: SetNull)
+
+  lines GoodsReceiptLine[]
+
+  @@unique([organisationId, reference])
+  @@index([organisationId])
+  @@index([purchaseOrderId])
+  @@map("goods_receipts")
+}
+
+/// How much of one ordered line this delivery brought.
+model GoodsReceiptLine {
+  id                  String @id @default(uuid()) @db.Uuid
+  organisationId      String @db.Uuid
+  goodsReceiptId      String @db.Uuid
+  /// Which ordered line it is against. Receiving something nobody ordered is
+  /// a conversation with the supplier, not a row in here.
+  purchaseOrderLineId String @db.Uuid
+
+  /// What was accepted.
+  quantity         Decimal @db.Decimal(12, 3)
+  /// What was sent back — short-delivered, wet, cracked, wrong grade. Held
+  /// apart from the accepted quantity because the two answer different
+  /// questions: one is what we owe for, the other is what the supplier is
+  /// still on the hook for.
+  rejectedQuantity Decimal @default(0) @db.Decimal(12, 3)
+  rejectedReason   String?
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation      Organisation      @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  goodsReceipt      GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderLine PurchaseOrderLine @relation(fields: [purchaseOrderLineId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId])
+  @@index([goodsReceiptId])
+  @@index([purchaseOrderLineId])
+  @@map("goods_receipt_lines")
+}
+
+/// What the supplier says we owe.
+///
+/// One amount against the whole order rather than lines of its own. Line-level
+/// invoice matching needs the supplier to invoice against your line numbers,
+/// and no supplier does — they invoice off their own picking slip. Matching
+/// value at the order and quantity at the line is what can actually be checked
+/// against the paper that arrives.
+model SupplierInvoice {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+
+  supplierId      String @db.Uuid
+  purchaseOrderId String @db.Uuid
+  /// Theirs. The number to quote when querying it.
+  invoiceNumber   String
+
+  invoicedAt DateTime  @db.Timestamptz(6)
+  dueAt      DateTime? @db.Timestamptz(6)
+
+  /// Excluding VAT, so it can be compared with the order, which is also
+  /// excluding VAT. Comparing a VAT-inclusive invoice with a VAT-exclusive
+  /// order is the most common way a match is declared wrong when it is right.
+  netAmountCents BigInt
+  vatCents       BigInt @default(0)
+
+  status         SupplierInvoiceStatus @default(RECEIVED)
+  disputedReason String?
+  paidAt         DateTime?             @db.Timestamptz(6)
+
+  recordStatus RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdBy    String?      @db.Uuid
+  updatedBy    String?      @db.Uuid
+  deletedAt    DateTime?    @db.Timestamptz(6)
+
+  organisation  Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  supplier      Supplier      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, supplierId, invoiceNumber])
+  @@index([organisationId])
+  @@index([organisationId, status])
+  @@index([purchaseOrderId])
+  @@map("supplier_invoices")
 }

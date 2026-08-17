@@ -36,7 +36,13 @@ const COMMITTED_STATUSES = ["APPROVED", "PAID"] as const;
 
 export interface BudgetHealth {
   budgetCents: bigint;
+  /** Expenses plus approved purchase orders. What the project has promised. */
   committedCents: bigint;
+  /** The expenses half of it. */
+  expenseCents: bigint;
+  /** The purchase-order half, and how many orders it came from. */
+  orderedCents: bigint;
+  orderCount: number;
   paidCents: bigint;
   pendingCents: bigint;
   remainingCents: bigint;
@@ -344,11 +350,20 @@ export const projectService = {
    *
    * Computed rather than stored, for the same reason compliance status is
    * (ADR-004): a stored total goes stale the moment an expense changes.
+   *
+   * An approved purchase order counts here alongside the approved expenses.
+   * Both are money the company has promised somebody, and until procurement
+   * existed the orders were simply invisible — a budget showing only what has
+   * been claimed back tells a manager they are fine right up to the month the
+   * suppliers invoice. The purchase orders are read directly rather than
+   * through the procurement service on purpose: this figure must not change
+   * depending on whether the person looking at the project also holds
+   * `procurement.order.view`.
    */
   async budgetHealth(projectId: string): Promise<BudgetHealth> {
     await requirePermission("projects.expense.view");
 
-    const [committed, paid, pending, project] = await Promise.all([
+    const [committed, paid, pending, project, orders] = await Promise.all([
       db.projectExpense.aggregate({
         where: { projectId, status: { in: [...COMMITTED_STATUSES] } },
         _sum: { amountCents: true },
@@ -365,15 +380,43 @@ export const projectService = {
         where: { id: projectId },
         select: { budgetCents: true },
       }),
+      // Lines rather than a total, because a purchase order stores no total —
+      // see the schema for why. CLOSED counts too: an order closed short is
+      // still money that went out on the part that arrived.
+      db.purchaseOrder.findMany({
+        where: { projectId, status: { in: ["APPROVED", "CLOSED"] } },
+        select: { id: true, lines: { select: { quantity: true, unitPriceCents: true } } },
+      }),
     ]);
 
     const budgetCents = project?.budgetCents ?? 0n;
-    const committedCents = committed._sum.amountCents ?? 0n;
+    const expenseCents = committed._sum.amountCents ?? 0n;
+
+    // Rounded per line, matching how the order itself is priced, so the figure
+    // here and the figure on the purchase order are the same number.
+    const orderedCents = orders.reduce(
+      (total, order) =>
+        total +
+        order.lines.reduce(
+          (lineTotal, line) =>
+            lineTotal +
+            BigInt(
+              Math.round(Number(line.quantity.toString()) * Number(line.unitPriceCents)),
+            ),
+          0n,
+        ),
+      0n,
+    );
+
+    const committedCents = expenseCents + orderedCents;
     const remainingCents = budgetCents - committedCents;
 
     return {
       budgetCents,
       committedCents,
+      expenseCents,
+      orderedCents,
+      orderCount: orders.length,
       paidCents: paid._sum.amountCents ?? 0n,
       pendingCents: pending._sum.amountCents ?? 0n,
       remainingCents,

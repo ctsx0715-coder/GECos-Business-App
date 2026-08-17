@@ -155,6 +155,41 @@ export const PERMISSIONS = {
   /// the above — the person who has to fit the handrail is not an investigator.
   "hse.action.complete": MODULES.HSE,
 
+  /*
+   * Procurement.
+   *
+   * Split finer than the other modules on purpose, because this is where the
+   * money physically leaves. The three-way match only means anything if the
+   * three documents are not all signed by the same hand: whoever raises the
+   * order should not be the one who says the goods arrived, and neither of
+   * them should be the one who releases the invoice for payment. Holding all
+   * three is how an invented supplier gets paid for goods nobody delivered.
+   */
+  "procurement.supplier.view": MODULES.PROCUREMENT,
+  "procurement.supplier.manage": MODULES.PROCUREMENT,
+  /// Clearing a supplier to be bought from. Vetting, not data entry: it is
+  /// where tax clearance and B-BBEE get looked at, so it is not `manage`.
+  "procurement.supplier.approve": MODULES.PROCUREMENT,
+
+  "procurement.order.view": MODULES.PROCUREMENT,
+  "procurement.order.create": MODULES.PROCUREMENT,
+  "procurement.order.submit": MODULES.PROCUREMENT,
+  /// The one that commits money. An approved order is spend, whether or not
+  /// anything has arrived and whether or not an invoice ever comes.
+  "procurement.order.approve": MODULES.PROCUREMENT,
+  "procurement.order.cancel": MODULES.PROCUREMENT,
+
+  /// Signing for a delivery. Held by storemen and foremen who hold none of the
+  /// rest — receiving is a job done at a gate, not at a desk.
+  "procurement.receipt.record": MODULES.PROCUREMENT,
+
+  "procurement.invoice.view": MODULES.PROCUREMENT,
+  "procurement.invoice.record": MODULES.PROCUREMENT,
+  /// Releasing an invoice for payment, against the match. Separate from
+  /// recording it for the same reason approving an order is separate from
+  /// raising one.
+  "procurement.invoice.approve": MODULES.PROCUREMENT,
+
   // Documents
   "documents.document.view": MODULES.DOCUMENTS,
   "documents.document.upload": MODULES.DOCUMENTS,
@@ -245,6 +280,19 @@ export const SYSTEM_ROLES: Record<
       // Runs the pay run. Hours, not people: this does not open the employee
       // register, the leave balances or anybody's medical certificate.
       "hr.payroll.export",
+      // The paying end of procurement: clears a supplier, authorises the
+      // commitment, releases the invoice. Deliberately holds neither
+      // `procurement.order.create` nor `procurement.receipt.record` — being
+      // able to raise an order, sign for it and pay it is one person owning
+      // all three sides of the match.
+      "procurement.supplier.view",
+      "procurement.supplier.approve",
+      "procurement.order.view",
+      "procurement.order.approve",
+      "procurement.order.cancel",
+      "procurement.invoice.view",
+      "procurement.invoice.record",
+      "procurement.invoice.approve",
     ],
   },
   project_manager: {
@@ -289,6 +337,45 @@ export const SYSTEM_ROLES: Record<
       "hse.incident.investigate",
       "hse.incident.close",
       "hse.action.complete",
+      // Orders what the site needs and signs for it when it arrives, but
+      // cannot authorise the spend — that is the whole point of the order
+      // going somewhere before it becomes a commitment.
+      "procurement.supplier.view",
+      "procurement.order.view",
+      "procurement.order.create",
+      "procurement.order.submit",
+      "procurement.receipt.record",
+      "procurement.invoice.view",
+    ],
+  },
+  /**
+   * Buying as its own role.
+   *
+   * Whoever runs the orders is not the person who signs off the spend and not
+   * the person who pays the invoice. That separation is the only thing the
+   * three-way match rests on, so it is expressed as a role rather than left to
+   * whoever happens to be given the executive login.
+   */
+  buyer: {
+    name: "Buyer",
+    description: "Runs the supplier register and the purchase orders. Cannot approve spend.",
+    permissions: [
+      "procurement.supplier.view",
+      "procurement.supplier.manage",
+      "procurement.order.view",
+      "procurement.order.create",
+      "procurement.order.submit",
+      "procurement.invoice.view",
+      "procurement.invoice.record",
+      // Deliberately without `procurement.order.approve`,
+      // `procurement.supplier.approve`, `procurement.receipt.record` and
+      // `procurement.invoice.approve`. A buyer who can also clear the
+      // supplier, sign for the goods and release the payment is every side of
+      // the transaction at once.
+      "projects.project.view",
+      "documents.document.view",
+      "documents.document.upload",
+      "reports.dashboard.view",
     ],
   },
   /**

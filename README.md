@@ -31,7 +31,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 659 tests against a real database
+pnpm test                   # 749 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -51,10 +51,13 @@ in `src/generated/prisma` and is not committed.
 | `pnpm db:seed` | Build a demo dataset from nothing — **truncates every table first** |
 | `pnpm hr:backfill` | Add the HR demo dataset to a database that already has data — additive, idempotent |
 | `pnpm hse:backfill` | The same for the incident register. Run it after `hr:backfill` — incidents are attributed to employees by name |
+| `pnpm procurement:backfill` | The same for suppliers and purchase orders. Also after `hr:backfill` — deliveries are signed for by employees by name |
 | `pnpm hr:accrue` | Credit leave balances with what they have earned. Runs monthly from Actions |
 | `pnpm hr:rotate` | Move people onto turns that start today. Runs every morning from Actions |
 | `pnpm db:studio` | Browse the database |
 | `pnpm screenshots:lifecycle` | Drives the lifecycle preview and reporting screens, asserting on each |
+| `pnpm screenshots:hse` | Drives the safety screens, asserting the statutory deadlines and the closing rule |
+| `pnpm screenshots:procurement` | Drives the procurement screens, asserting the match and who may do what |
 
 `db:sync` runs automatically on every **production** deploy and is safe to
 repeat: it only adds, leaves an unimplemented module switched off, and never
@@ -496,6 +499,107 @@ choosing a later start date.
 Not yet handled: toolbox talks and their attendance registers, site inductions,
 and the Construction Regulations 2014 appointment letters. All three are real
 duties and none of them are here.
+
+## Procurement
+
+The money end. A purchase order, what actually arrived against it, and what the
+supplier says we owe — held apart on purpose, because the whole value of
+running orders rather than letting a foreman phone a supplier is that the three
+can be compared.
+
+### The three-way match
+
+Any one of the three documents on its own proves nothing. An invoice is a
+supplier's claim. A delivery note is a driver's claim. An order is what we
+agreed to. Money leaks in the gaps between them, and every gap has a name:
+
+| Gap | What it looks like |
+|---|---|
+| Part delivered | Half the reinforcing came on Tuesday and the rest has not |
+| Over-delivered | Nineteen and a half cubes arrived against an order for eighteen, somebody signed for it, and it will be invoiced |
+| Sent back | Four rolls of binding wire arrived rusted. Not ours to pay for, and still owed by the supplier |
+| **Billed over** | **Seven days of compactor hire on site, fourteen on the invoice** |
+
+The last one is what the module exists for. Matched against the *order* it
+reads as correct — the order was for fourteen days — and it is only wrong when
+compared against what was delivered. So invoices are matched against deliveries
+here, never against orders.
+
+The arithmetic is in `src/modules/procurement/matching.ts` with no database in
+it, driven by `matching.test.ts` across the awkward cases: several deliveries
+against one line, fractional quantities, an order nobody filled in, and a
+disputed invoice — which still counts as a claim against us, because an order
+whose only invoice is disputed must not read as "nothing billed".
+
+Tolerance is both a flat amount and a percentage, whichever is larger. A
+percentage alone treats R2 on a R400 order as worth a phone call; a flat amount
+alone waves through R80 of drift on an order for R2 million.
+
+### A draft is the requisition
+
+There is no separate requisition table. For a company of this size the order a
+site wants and the request for it are the same piece of paper, and a second
+form would ask the same questions twice. An order becomes a commitment at
+APPROVED and not before.
+
+That status says nothing about whether the goods have arrived. Delivery is
+derived from the receipts every time it is asked, because a stored "received"
+flag and a receipts table disagree the first time somebody records a late
+delivery, and then two screens give two answers.
+
+### Committed spend
+
+An approved purchase order counts against the project budget alongside the
+approved expenses that already did. Both are money the company has promised
+somebody. Until this module existed the orders were invisible, and a budget
+showing only what has been claimed back tells a manager they are fine right up
+to the month the suppliers invoice.
+
+The orders are read directly by the projects service rather than through
+procurement, so the figure does not change depending on whether the person
+looking at the project also holds `procurement.order.view`. A budget that
+differs by viewer is not a budget.
+
+### Who may do what
+
+Split finer than anywhere else in the system, because this is where money
+physically leaves. The match only means anything if the three documents are not
+all signed by the same hand.
+
+| Role | Can | Deliberately cannot |
+|---|---|---|
+| Buyer | Add suppliers, raise orders, submit them, capture invoices | Clear a supplier, approve an order, sign for a delivery, release an invoice |
+| Project Manager | Raise orders for their site, sign for deliveries | Approve the spend |
+| Finance Manager | Clear suppliers, approve orders, release invoices | Raise an order, sign for a delivery |
+
+Holding all three sides is how an invented supplier gets paid for goods nobody
+delivered. Separation of duties is enforced in the service, not the screen:
+whoever raised an order cannot approve it even if they hold the permission.
+
+### The supplier register
+
+Two columns on it are not paperwork. A lapsed tax clearance on a public-sector
+contract becomes the client's problem and therefore ours, so it is flagged on
+the row rather than behind a click. The B-BBEE level is what a tender asks for
+a year later, when nobody can reconstruct the spend split from a shoebox of
+invoices — and "no certificate" is shown differently from level 8, because they
+are not the same thing.
+
+Nothing can be ordered from a supplier nobody has cleared, and the order form
+only offers cleared ones. Showing the rest and refusing on submit would be
+technically correct and useless: the buyer has typed the whole order by then.
+
+### Overriding the match
+
+Neither the invoice release nor the order close is a veto. A supplier may
+legitimately invoice ahead on a long lead item, and an order is sometimes right
+to close short — the balance has been written off, or nobody is going to chase
+forty rand. Both are allowed and neither is allowed silently: the reason goes
+on the record, and the screen says what does not balance on the way out.
+
+Not yet handled: credit notes as their own record, blanket orders called off
+over a period, and invoices spanning more than one order. All three are real
+and none of them are here.
 
 ## Approvals
 

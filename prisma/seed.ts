@@ -10,6 +10,7 @@ import {
 import { DEFAULT_TENDER_CHECKLIST } from "@/modules/tenders/tender.service";
 import { seedHrDemo } from "./hr-demo";
 import { seedHseDemo } from "./hse-demo";
+import { seedProcurementDemo } from "./procurement-demo";
 import type { TenderStatus } from "@/generated/prisma/client";
 
 /**
@@ -68,6 +69,7 @@ async function seedTenant(params: {
             MODULES.REPORTS,
             MODULES.HR,
             MODULES.HSE,
+            MODULES.PROCUREMENT,
           ].includes(moduleKey as never),
         },
       });
@@ -784,6 +786,14 @@ async function main() {
     // After HR, and not by accident: incidents are attributed to employees by
     // name, so the people have to exist first.
     await seedHseDemo({
+      organisationId: nopedi.organisation.id,
+      userIds: nopedi.userIds,
+    });
+
+    // ---- Procurement --------------------------------------------------------
+    // Last, and for two reasons: deliveries are signed for by employees looked
+    // up by name, and the orders are raised against the sites above.
+    await seedProcurementDemo({
       organisationId: nopedi.organisation.id,
       userIds: nopedi.userIds,
     });
