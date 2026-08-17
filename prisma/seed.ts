@@ -9,6 +9,7 @@ import {
 } from "@/lib/permissions/catalogue";
 import { DEFAULT_TENDER_CHECKLIST } from "@/modules/tenders/tender.service";
 import { seedHrDemo } from "./hr-demo";
+import { seedHseDemo } from "./hse-demo";
 import type { TenderStatus } from "@/generated/prisma/client";
 
 /**
@@ -66,6 +67,7 @@ async function seedTenant(params: {
             MODULES.DOCUMENTS,
             MODULES.REPORTS,
             MODULES.HR,
+            MODULES.HSE,
           ].includes(moduleKey as never),
         },
       });
@@ -180,6 +182,7 @@ async function main() {
       { roleKey: "tender_officer", firstName: "Sipho", lastName: "Ndlovu", jobTitle: "Tender Officer" },
       { roleKey: "employee", firstName: "Anele", lastName: "Dlamini", jobTitle: "Site Supervisor" },
       { roleKey: "hr_manager", firstName: "Refilwe", lastName: "Molefe", jobTitle: "HR Manager" },
+      { roleKey: "safety_officer", firstName: "Mandla", lastName: "Ngcobo", jobTitle: "Safety Officer" },
     ],
   });
 
@@ -775,6 +778,14 @@ async function main() {
       organisationId: nopedi.organisation.id,
       userIds: nopedi.userIds,
       decidedById: nopedi.userIds.hr_manager,
+    });
+
+    // ---- Health and safety --------------------------------------------------
+    // After HR, and not by accident: incidents are attributed to employees by
+    // name, so the people have to exist first.
+    await seedHseDemo({
+      organisationId: nopedi.organisation.id,
+      userIds: nopedi.userIds,
     });
   });
 

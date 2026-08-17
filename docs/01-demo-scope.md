@@ -94,7 +94,7 @@ Blob, Resend, Sentry) rather than on design decisions.
 
 Cut ruthlessly. These are Phase 2+ and adding them now defeats the purpose:
 
-HR, Procurement, Inventory, Assets, Finance, HSE, tender pricing
+Procurement, Inventory, Assets, Finance, tender pricing
 build-up, proposal document generation, configurable dashboards, report builder,
 exports, SMS or WhatsApp channels, bulk import, and search.
 
@@ -179,8 +179,33 @@ extension could not serialise a Decimal, and leave is the first thing measured
 in half days rather than integer cents. That is one platform change across four
 modules.
 
+**Health and safety followed HR**, and is the first module the agreed phase
+order did not name — it was chosen because it follows HR most naturally (the
+same people, and the certification and expiry machinery already existed) and
+because it is the one a South African contractor is legally obliged to run.
+
+It is also the first module that is not CRUD on proven rails, and it is worth
+being precise about why, because the claim above deserves testing rather than
+repeating. The rails held: two models registered in `model-metadata.ts`, one
+service, one repository, no platform change of any kind. What it needed beyond
+them was *subject-matter code* — a module that decides what the OHSA and COIDA
+each require and by when, and another that computes injury rates against the
+hours the timesheets actually recorded. Neither is CRUD, and neither could have
+been bought by better foundations.
+
+That is a useful correction to the claim, not a contradiction of it. The
+foundation removes the plumbing; it was never going to remove the domain. What
+the three previous modules showed is that the plumbing stays removed, and this
+one shows the same.
+
+It also depends on an earlier module in a way none of the others did: the
+safety rates divide by hours worked, and those come from the timesheets. A
+contractor asked for its injury rate normally guesses the denominator. This one
+does not have to.
+
 That is the claim the walking skeleton was built to test, now with evidence
-from three modules: each one after the first is CRUD on proven rails.
+from four modules: each one after the first is CRUD on proven rails, plus
+whatever the subject itself genuinely requires.
 
 ## The input layer
 

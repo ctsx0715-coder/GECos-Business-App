@@ -3,10 +3,11 @@
 A centralised platform for managing people, customers, projects, tenders,
 procurement, assets, compliance and financial operations from one system.
 
-Past the walking skeleton. Tenders, CRM, Projects and HR are built, with
-record-level reporting and a design system across all of them. Five Stage 1
-acceptance criteria remain open, every one blocked on an external account
-rather than a decision — see [`docs/01-demo-scope.md`](docs/01-demo-scope.md).
+Past the walking skeleton. Tenders, CRM, Projects, HR and Health & Safety are
+built, with record-level reporting and a design system across all of them. Five
+Stage 1 acceptance criteria remain open, every one blocked on an external
+account rather than a decision — see
+[`docs/01-demo-scope.md`](docs/01-demo-scope.md).
 
 ## Documentation
 
@@ -30,7 +31,7 @@ Requires Node 20.9+ and a PostgreSQL 14+ database.
 pnpm install
 cp .env.example .env        # then point DATABASE_URL at your database
 pnpm prisma migrate dev     # create the schema
-pnpm test                   # 579 tests against a real database
+pnpm test                   # 659 tests against a real database
 ```
 
 `pnpm install` runs `prisma generate` automatically. The generated client lands
@@ -49,6 +50,7 @@ in `src/generated/prisma` and is not committed.
 | `pnpm db:sync` | Reconcile permissions, roles and module flags into an existing database |
 | `pnpm db:seed` | Build a demo dataset from nothing — **truncates every table first** |
 | `pnpm hr:backfill` | Add the HR demo dataset to a database that already has data — additive, idempotent |
+| `pnpm hse:backfill` | The same for the incident register. Run it after `hr:backfill` — incidents are attributed to employees by name |
 | `pnpm hr:accrue` | Credit leave balances with what they have earned. Runs monthly from Actions |
 | `pnpm hr:rotate` | Move people onto turns that start today. Runs every morning from Actions |
 | `pnpm db:studio` | Browse the database |
@@ -388,6 +390,112 @@ so the number on the screen before submitting is the number that is charged.
 
 A cycle is the calendar year. An organisation whose leave year runs March to
 February is a policy answer we do not have yet, and it changes one function.
+
+## Health and safety
+
+Near misses are in the same register as fatalities. They are the same event
+with a different amount of luck in it, and a register that only holds the ones
+that drew blood has thrown away every warning it was given. The classification
+decides what happens next; it does not decide whether the thing gets written
+down.
+
+Reporting is the only screen in the module that needs no permission. A
+near-miss system that asks whether you are allowed to use it collects nothing,
+and the whole value of one is the man who nearly got hit telling somebody the
+same afternoon. Reading the register is gated — those rows carry named people's
+injuries, which POPIA treats as special personal information — so "can file
+one" and "can read them all" are deliberately far apart.
+
+### The two duties
+
+A South African employer owes two separate reports after an incident, and they
+are constantly confused with each other because both are filed within seven
+days and both feel like "reporting the accident":
+
+| | **OHSA s24** | **COIDA s39** |
+|---|---|---|
+| Goes to | Department of Employment and Labour | Compensation Fund |
+| Asks | Is the workplace dangerous? | Does an injured worker get paid? |
+| Form | WCL.1 | W.Cl.2 |
+| Triggered by | Death, permanent defect, 14+ days off work, or a major incident, spill or runaway machine | An injury needing a doctor or costing time |
+| Clock starts | When it happened | When the employer found out |
+
+An incident can owe one, both or neither. A burst hydraulic hose that sprayed
+oil across the yard owes the Department and nothing to the Fund — there is no
+claimant. A cut hand needing stitches owes the Fund and nothing to the
+Department. The two clocks are genuinely different: a Friday injury mentioned
+to the foreman on Monday gets the weekend on one duty and not the other.
+
+`src/modules/hse/reportability.ts` works this out from the facts on the row,
+every time it is asked, rather than stamping a flag on at report time. Two
+reasons. The days somebody could not work is usually unknown on the day and
+gets filled in a week later, so a stored flag would be stale the moment it was
+written — an incident logged as first aid on Tuesday becomes lost time on
+Friday when the man does not come back, and crosses the fourteen-day line weeks
+after that. And these rules will be wrong somewhere; recomputing means a
+correction fixes the whole register rather than only the incidents filed after
+the fix.
+
+It prompts, it does not decide. Whether an injury is "likely to cause a
+permanent physical defect" is a doctor's judgement and whether to file is a
+safety officer's. What it can do is make sure nobody discovers on day eight
+that day seven was the deadline. Nothing in the system files anything with
+anybody — the forms are submitted elsewhere, and this records that they were.
+
+When the answer is genuinely unknown it says so rather than guessing. "How many
+days will they be off work?" is its own list on the dashboard, separate from
+the filings that are actually owed, because a duty nobody can yet know they owe
+is not the same as one they owe.
+
+### Corrective actions, and the hierarchy of control
+
+Every action records which kind of fix it is — eliminate, substitute, engineer
+out, procedure, PPE — because "issue new PPE" is what a closed-out action
+register fills up with, and it is the weakest control there is: it protects one
+person, only while worn, only from the harm it was chosen for. The dashboard
+shows the share of actions that change the job rather than the worker. A
+register that cannot show that difference is a register that hides it.
+
+**An incident does not close while a corrective action on it is open.** Closing
+is the moment everybody stops looking, and an action that outlives that moment
+never gets done. That single rule is most of what separates an action register
+from a wish list.
+
+**And whoever investigated it cannot be the one to close it** — the same
+separation of duties that stops a tender officer approving their own tender. A
+safety officer under pressure to shrink an open list is exactly who that rule
+exists for, which is why the seeded Safety Officer role holds
+`hse.incident.investigate` and deliberately not `hse.incident.close`.
+
+### The safety numbers
+
+Every contractor is asked for these — by a client in a pre-qualification, by
+the Department in an audit, by an insurer at renewal — and most arrive at them
+by guessing the hours worked. This does not have to guess: the timesheets are
+in the same database, and the denominator is approved hours for the same
+period. That is why timesheets were built before this module.
+
+Rates are per 200 000 hours, the industry's base: one hundred people, forty
+hours, fifty weeks. A rate of 1.0 means about one injury per hundred people per
+year.
+
+The honest part is what sits next to the rate. On a contractor's hours these
+figures are extremely sensitive — one accident can double them — so the rate is
+never shown alone. Above 50 000 hours it is shown with what one more injury
+would make it. Below that it is shown with what a *single* injury is worth in
+rate points, and labelled as too thin to compare, because two injuries against
+a fortnight of timesheets produces a figure in the hundreds. That is a true
+division and a false statement about the company, and it is the number somebody
+would otherwise paste into a tender document.
+
+Also on the dashboard: days since the last lost-time injury — the sign on the
+gate — counted from the most recent one on record rather than from whatever
+window is being viewed, because a company does not get its counter reset by
+choosing a later start date.
+
+Not yet handled: toolbox talks and their attendance registers, site inductions,
+and the Construction Regulations 2014 appointment letters. All three are real
+duties and none of them are here.
 
 ## Approvals
 

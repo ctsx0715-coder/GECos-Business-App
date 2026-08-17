@@ -23,6 +23,7 @@
     "screenshots:lifecycle": "tsx scripts/screenshots-lifecycle.ts",
     "db:sync": "tsx scripts/sync-config.ts",
     "hr:backfill": "tsx scripts/backfill-hr.ts",
+    "hse:backfill": "tsx scripts/backfill-hse.ts",
     "hr:accrue": "tsx scripts/run-accrual.ts",
     "hr:rotate": "tsx scripts/apply-rotations.ts"
   },

@@ -1,0 +1,75 @@
+name: Backfill safety demo data
+
+# Manually triggered, and additive.
+#
+# Same reasoning as the HR backfill: the seed truncates every table before it
+# writes, which is correct for a fresh database and ruinous for this one. This
+# adds the incident register and destroys nothing.
+#
+# Run the HR backfill first. Incidents are attributed to employees by name, so
+# without the people the register comes out with nobody hurt in it.
+#
+# Safe to run twice — it adds only what is missing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type ADD to confirm — this writes demo incidents and a Safety Officer login'
+        required: true
+        default: ''
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the confirmation
+        if: inputs.confirm != 'ADD'
+        run: |
+          echo "::error::Confirmation failed. Type ADD exactly to run this."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The incident tables have to exist before anything can be written into
+      # them. Deploys apply migrations too; this is here so the order cannot be
+      # got wrong by running the two in the wrong sequence.
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm prisma migrate deploy
+
+      # The Safety Officer role has to exist before a login can be given it,
+      # and db:sync is what writes the system roles. VERCEL_ENV is unset here,
+      # which the database guard reads as "not a Vercel build" and allows —
+      # the rule it enforces is about preview deploys, not about this.
+      - name: Sync roles and permissions
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm db:sync
+
+      - name: Backfill
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NOPEDI_DEMO_DATA: 'true'
+        run: pnpm hse:backfill
+
+      - name: Summary
+        run: |
+          echo "### Safety data added" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Reload the deployment — no redeploy needed." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Sign in as Mandla Ngcobo (Safety Officer) for the register and" >> $GITHUB_STEP_SUMMARY
+          echo "the investigations. He deliberately cannot close an incident —" >> $GITHUB_STEP_SUMMARY
+          echo "sign in as Zanele Khoza (Project Manager) for that." >> $GITHUB_STEP_SUMMARY
